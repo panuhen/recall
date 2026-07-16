@@ -1,4 +1,4 @@
-# recall
+# re:call
 
 A self-hostable corporate "second brain" — an Obsidian-like markdown notes app with
 semantic search, backlinks, and a knowledge graph, behind Entra ID (MSAL) SSO, with a
