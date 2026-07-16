@@ -1,0 +1,173 @@
+# =============================================================================
+# recall — CI/CD example: build images in ACR, deploy to Azure Container Apps
+# =============================================================================
+# Example template. Copy to `azure-pipelines.yml`, fill in the `variables` block
+# (or set them as Azure DevOps pipeline variables), and point your pipeline at
+# it. The resource names below match the defaults in infra/provision.example.sh.
+#
+# Flow: on push to main → build both images in ACR (cloud build, no Docker on
+# the agent) → roll the new tag out to the three container apps. The backend
+# self-runs `alembic upgrade head` on start, so no separate migration step.
+#
+# One-time setup (see infra/README.md § CI/CD): create an ARM service connection
+# whose service principal has Contributor on your resource group, set the
+# variables below to your own, and authorize this pipeline to use the connection.
+# =============================================================================
+
+trigger:
+  branches:
+    include: [ main ]
+  paths:
+    exclude:
+      - docs/**
+      - "**/*.md"
+      - .gitignore
+
+pr: none   # deploy pipeline runs on merge to main, not on PRs
+
+variables:
+  # Fill these in — here, or override them as Azure DevOps pipeline variables.
+  azureServiceConnection: '<your-arm-service-connection>'  # ARM connection; its SP needs Contributor on the RG
+  resourceGroup: '<your-resource-group>'        # e.g. recall-rg
+  acrName: '<your-acr-name>'                    # e.g. recallacr — alphanumeric only, globally unique
+  imageTag: '$(Build.BuildId)'                  # traceable, enables rollback
+  mcpApp: 'recall-mcp'
+  webApp: 'recall-web'
+  workerApp: 'recall-worker'
+
+stages:
+# ── Test ──────────────────────────────────────────────────────────────────────
+# Gate: lint + typecheck + backend tests must pass before anything is built or
+# deployed. Build dependsOn this stage, so a red check here stops the rollout —
+# untested/broken code never reaches Container Apps.
+- stage: Test
+  displayName: Lint, typecheck & tests
+  jobs:
+  - job: backend
+    displayName: ruff + pytest (Postgres)
+    pool:
+      vmImage: ubuntu-latest
+    variables:
+      # conftest swaps the db-name to recall_test; the recall superuser can
+      # CREATE DATABASE. AUTH_MODE=dev keeps identity resolution offline.
+      DATABASE_URL: 'postgresql://recall:recall@localhost:5432/recall'
+      AUTH_MODE: 'dev'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.12'
+    - script: |
+        set -e
+        docker run -d --name pg \
+          -e POSTGRES_USER=recall -e POSTGRES_PASSWORD=recall -e POSTGRES_DB=recall \
+          -p 5432:5432 pgvector/pgvector:pg16
+        for i in $(seq 1 30); do
+          docker exec pg pg_isready -U recall -d recall && break
+          sleep 2
+        done
+      displayName: Start Postgres (pgvector)
+    - script: |
+        set -e
+        python -m pip install --upgrade pip
+        # Runtime deps from the hashed lock (same as the image), then the
+        # unhashed test-only deps on top — separate commands, since pip's
+        # --require-hashes is all-or-nothing per invocation.
+        pip install --require-hashes -r requirements.txt
+        pip install -r requirements-dev.txt
+      displayName: Install backend deps
+    - script: |
+        set -e
+        ruff check src tests
+      displayName: ruff
+    - script: |
+        set -e
+        python -m pytest tests -q
+      displayName: pytest
+  - job: web
+    displayName: tsc + eslint
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '22.x'
+    - script: npm ci
+      workingDirectory: web
+      displayName: npm ci
+    - script: npx tsc --noEmit
+      workingDirectory: web
+      displayName: typecheck
+    - script: npm run lint
+      workingDirectory: web
+      displayName: eslint
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+- stage: Build
+  displayName: Build & push images
+  dependsOn: Test
+  condition: succeeded()
+  jobs:
+  - job: build
+    displayName: az acr build
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: AzureCLI@2
+      displayName: Build backend image
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          az acr build -r $(acrName) \
+            -t recall-backend:$(imageTag) -t recall-backend:latest \
+            -f Dockerfile .
+    - task: AzureCLI@2
+      displayName: Build web image
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          # -f is resolved relative to the working dir, not the context, so this
+          # must be web/Dockerfile (else it picks up the backend Dockerfile).
+          az acr build -r $(acrName) \
+            -t recall-web:$(imageTag) -t recall-web:latest \
+            -f web/Dockerfile ./web
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+- stage: Deploy
+  displayName: Deploy to Container Apps
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: deploy
+    displayName: Roll out new revision
+    pool:
+      vmImage: ubuntu-latest
+    environment: recall-dev     # DevOps Environment — add approvals/gates here later
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: Update container apps to $(imageTag)
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                # Hosted agents' az has no containerapp extension (and the task
+                # uses a fresh AZURE_CONFIG_DIR), so install it explicitly.
+                az config set extension.use_dynamic_install=yes_without_prompt
+                az extension add --name containerapp --upgrade --only-show-errors
+                ACR_LOGIN=$(az acr show -n $(acrName) --query loginServer -o tsv)
+                az containerapp update -g $(resourceGroup) -n $(mcpApp) \
+                  --image $ACR_LOGIN/recall-backend:$(imageTag)
+                az containerapp update -g $(resourceGroup) -n $(workerApp) \
+                  --image $ACR_LOGIN/recall-backend:$(imageTag)
+                az containerapp update -g $(resourceGroup) -n $(webApp) \
+                  --image $ACR_LOGIN/recall-web:$(imageTag)

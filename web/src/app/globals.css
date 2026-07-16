@@ -1,0 +1,573 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+:root {
+  /* Tell the browser which palette its native UI (scrollbars, form controls,
+     spellcheck) should use; inherits to every scroll container. Overridden for
+     the dark theme below so the window scrollbar tracks the theme. */
+  color-scheme: light;
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  /* Editor tab strip: inactive tabs + strip sit on this gray; the active tab
+     uses --background (white) so it reads as merged with the content. */
+  --tab-bar: oklch(0.955 0 0);
+  /* Shared line color for the tab frame: active-tab border, tab dividers,
+     baseline, and the sidebar↔content divider. Tune here in one place. */
+  --tab-border: oklch(0.8 0 0);
+  /* Recessed chrome (sidebar, settings rail): a step back from --background so
+     content reads as the brighter, focused plane. --sidebar-accent is its
+     hover/active fill, kept clear of --accent (which would vanish on it). */
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.945 0 0);
+  /* Reading/editor content colors, shared by rendered markdown (.md-reading)
+     and the live-preview editor (.cm-lp-*). --link is the single accent;
+     --quote is de-emphasized quote/bullet text; the code tints sit behind
+     inline code, code blocks, and table headers. Dark values below. */
+  --link: #2563eb;
+  --quote: #6b7280;
+  --code-bg: rgba(135, 131, 120, 0.18);
+  --code-block-bg: rgba(135, 131, 120, 0.12);
+  /* Syntax-highlight token colors for rendered code blocks (highlight.js /
+     rehype-highlight). A restrained GitHub-light palette; dark values below.
+     Anything not mapped falls back to --foreground (the code text color). */
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-function: #8250df;
+  --hl-title: #953800;
+  --hl-attr: #0550ae;
+  --hl-tag: #116329;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  /* Content is a soft dark sheet lifted above the recessed chrome (--sidebar,
+     below); cards and overlays lift a further step to --card. */
+  --background: oklch(0.18 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.22 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --tab-bar: oklch(0.205 0 0);
+  --tab-border: oklch(0.4 0 0);
+  /* Chrome recedes to a deep near-black behind the content sheet; its
+     hover/active fill lifts back toward the content tone. */
+  --sidebar: oklch(0.13 0 0);
+  --sidebar-accent: oklch(0.24 0 0);
+  /* Lighter blue so links stay legible on the dark ground; a lighter quote
+     gray; and white-alpha code tints (matching --border's dark treatment)
+     since the warm-gray light tint would muddy against near-black. */
+  --link: #60a5fa;
+  --quote: #9ca3af;
+  --code-bg: rgba(255, 255, 255, 0.1);
+  --code-block-bg: rgba(255, 255, 255, 0.05);
+  /* GitHub-dark syntax tokens — brighter, higher-chroma so they read on the
+     near-black code ground. */
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-number: #79c0ff;
+  --hl-function: #d2a8ff;
+  --hl-title: #ffa657;
+  --hl-attr: #79c0ff;
+  --hl-tag: #7ee787;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-tab-bar: var(--tab-bar);
+  --color-tab-border: var(--tab-border);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-link: var(--link);
+  --color-quote: var(--quote);
+  --color-code-bg: var(--code-bg);
+  --color-code-block-bg: var(--code-block-bg);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+/* Single source of truth for fonts. IBM Plex Sans/Mono (self-hosted via
+   next/font in layout.tsx) with the system stack as fallback. A non-inline
+   @theme block so both `var(--font-sans)` (raw CSS: body, editor, reading
+   view) and the Tailwind `font-sans` / `font-mono` utilities resolve. */
+@theme {
+  --font-sans: var(--font-ibm-plex-sans), system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  /* Default border color. Must be layered so `border-*` utilities can override
+     it — an unlayered `*` rule would beat every Tailwind border-color utility. */
+  * {
+    border-color: var(--border);
+  }
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Property date/date-time inputs render their own calendar icon on the left,
+   so hide the browser's built-in (right-side) picker indicator. */
+.date-field::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+
+/* Reading view — rendered markdown (react-markdown). Tuned to match the
+   live-preview typography. */
+.md-reading {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--foreground);
+}
+.md-reading > :first-child {
+  margin-top: 0;
+}
+/* Anchor jumps (TOC) land the heading below the sticky note header. */
+.md-reading :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 3.5rem;
+}
+.md-reading h1 {
+  font-size: 1.9em;
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0.9em 0 0.3em;
+}
+.md-reading h2 {
+  font-size: 1.55em;
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0.9em 0 0.3em;
+}
+.md-reading h3 {
+  font-size: 1.28em;
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.md-reading h4,
+.md-reading h5,
+.md-reading h6 {
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.md-reading p {
+  margin: 0.6em 0;
+}
+.md-reading ul,
+.md-reading ol {
+  margin: 0.6em 0;
+  padding-left: 1.5em;
+}
+.md-reading li {
+  margin: 0.15em 0;
+}
+.md-reading a {
+  color: var(--link);
+  text-decoration: underline;
+}
+.md-reading .md-wikilink {
+  color: var(--link);
+  text-decoration: underline;
+}
+/* Resolved wikilink — clickable, opens the target note. */
+.md-reading .md-wikilink-live {
+  cursor: pointer;
+}
+/* Unresolved wikilink — no matching note in this workspace; inert + muted. */
+.md-reading .md-wikilink-dead {
+  color: var(--muted-foreground);
+  text-decoration: underline dotted;
+  cursor: default;
+}
+.md-reading blockquote {
+  margin: 0.6em 0;
+  padding-left: 0.9em;
+  border-left: 3px solid var(--border);
+  color: var(--quote);
+  font-style: italic;
+}
+.md-reading code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--code-bg);
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+}
+.md-reading pre {
+  background: var(--code-block-bg);
+  padding: 0.8em 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.7em 0;
+}
+.md-reading pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.875em;
+}
+/* Syntax highlighting (rehype-highlight adds .hljs to a highlighted <code> and
+   wraps tokens in .hljs-* spans). Theme-aware via the --hl-* tokens; unmapped
+   classes inherit the code text color. Kept restrained to fit the calm surface
+   — coloring the code, not lighting it up. */
+.md-reading code.hljs {
+  color: var(--foreground);
+}
+.md-reading .hljs-comment,
+.md-reading .hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.md-reading .hljs-keyword,
+.md-reading .hljs-selector-tag,
+.md-reading .hljs-built_in,
+.md-reading .hljs-literal,
+.md-reading .hljs-doctag {
+  color: var(--hl-keyword);
+}
+.md-reading .hljs-string,
+.md-reading .hljs-regexp,
+.md-reading .hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+.md-reading .hljs-number,
+.md-reading .hljs-symbol,
+.md-reading .hljs-bullet {
+  color: var(--hl-number);
+}
+.md-reading .hljs-function .hljs-title,
+.md-reading .hljs-title.function_ {
+  color: var(--hl-function);
+}
+.md-reading .hljs-title,
+.md-reading .hljs-class .hljs-title,
+.md-reading .hljs-title.class_,
+.md-reading .hljs-type,
+.md-reading .hljs-variable,
+.md-reading .hljs-template-variable {
+  color: var(--hl-title);
+}
+.md-reading .hljs-attr,
+.md-reading .hljs-attribute,
+.md-reading .hljs-property,
+.md-reading .hljs-params {
+  color: var(--hl-attr);
+}
+.md-reading .hljs-name,
+.md-reading .hljs-selector-id,
+.md-reading .hljs-selector-class,
+.md-reading .hljs-section {
+  color: var(--hl-tag);
+}
+.md-reading .hljs-meta {
+  color: var(--hl-comment);
+}
+.md-reading .hljs-emphasis {
+  font-style: italic;
+}
+.md-reading .hljs-strong {
+  font-weight: 600;
+}
+/* Mermaid diagrams (```mermaid fenced blocks). The <pre> chrome is dropped in
+   reading-view.tsx so these sit directly in the flow, centered. The figure
+   wraps the diagram and a hover toolbar (expand / export). */
+.md-reading .mermaid-figure {
+  position: relative;
+  margin: 0.9em 0;
+}
+.md-reading .mermaid-rendered {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  cursor: zoom-in;
+  border-radius: 8px;
+}
+.md-reading .mermaid-rendered:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.md-reading .mermaid-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Toolbar floats top-right, revealed on hover / keyboard focus. On touch (no
+   hover) it stays visible since there is nothing to hover. */
+.md-reading .mermaid-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.md-reading .mermaid-figure:hover .mermaid-toolbar,
+.md-reading .mermaid-figure:focus-within .mermaid-toolbar {
+  opacity: 1;
+}
+@media (hover: none) {
+  .md-reading .mermaid-toolbar {
+    opacity: 1;
+  }
+}
+
+/* Shared toolbar button — used by both the inline figure toolbar and the
+   lightbox control bar (which is portalled outside .md-reading, so this rule is
+   intentionally unscoped). */
+.mermaid-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.mermaid-tool-btn:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.mermaid-tool-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* Zoom/pan lightbox (portalled Dialog). */
+.mermaid-lightbox {
+  display: flex;
+  flex-direction: column;
+}
+.mermaid-lightbox-stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--background);
+  cursor: grab;
+  touch-action: none; /* pan/zoom are handled in JS */
+}
+.mermaid-lightbox-stage:active {
+  cursor: grabbing;
+}
+.mermaid-lightbox-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+  /* Intentionally no will-change/transform layer promotion: it caches the SVG
+     as a bitmap and scales that bitmap on zoom (blurry past 1x). Without it the
+     browser re-rasterizes the vector crisply at each zoom level. */
+}
+.mermaid-lightbox-content svg {
+  max-width: none; /* allow zooming beyond the container width */
+  height: auto;
+}
+.mermaid-lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.mermaid-zoom-readout {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+}
+.mermaid-bar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border);
+}
+.mermaid-bar-close {
+  margin-left: auto;
+}
+.md-reading .mermaid-loading {
+  margin: 0.9em 0;
+  color: var(--muted-foreground);
+  font-size: 0.9em;
+}
+/* Render failed — show the source (never a blank/broken block). */
+.md-reading .mermaid-error {
+  margin: 0.7em 0;
+  padding: 0.6em 0.9em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-block-bg);
+}
+.md-reading .mermaid-error-label {
+  display: block;
+  margin-bottom: 0.4em;
+  color: var(--muted-foreground);
+  font-size: 0.8em;
+}
+.md-reading .mermaid-error pre {
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+.md-reading hr {
+  border: none;
+  border-top: 2px solid var(--border);
+  margin: 1.2em 0;
+}
+.md-reading img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.md-reading table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  font-size: 0.95em;
+}
+.md-reading th,
+.md-reading td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.7em;
+  text-align: left;
+}
+.md-reading th {
+  font-weight: 600;
+  background: var(--code-block-bg);
+}
+.md-reading input[type="checkbox"] {
+  margin-right: 0.4em;
+}
+/* Strike through completed task items, matching Live Preview's cm-lp-task-done.
+   Tight lists put the checkbox directly in the <li>; loose lists wrap it in a
+   <p>. Scope to the item's own checkbox so a parent isn't struck by a checked
+   child. */
+.md-reading li.task-list-item:has(> input[type="checkbox"]:checked),
+.md-reading li.task-list-item:has(> p > input[type="checkbox"]:checked) {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Scrollable-but-chromeless: used by the editor tab strip, which scrolls
+   programmatically via chevron buttons instead of showing a scrollbar. */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* WebKit */
+}
+
+/* Slim scrollbar for the sidebar's scroll area. `scrollbar-width: thin` keeps
+   the native, color-scheme-aware colors (so it still tracks the theme) and just
+   narrows the bar; the WebKit rules give the same slimness on Chromium/Safari
+   with a faint, self-tinting thumb. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Lighter default stroke on all lucide icons (their built-in default is 2). A
+   CSS property overrides the SVG stroke-width presentation attribute. */
+.lucide {
+  stroke-width: 1.25;
+}
+
+/* Static re:call triangle mark (sign-in). Fill uses --foreground so it reads
+   black on light and white on dark. */
+.recall-logo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Brief highlight on a sidebar row when a favorite reveals it, so the jump is
+   visible even when the target is already expanded/on-screen. */
+@keyframes recall-flash {
+  0% {
+    background-color: var(--sidebar-accent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.recall-flash {
+  animation: recall-flash 1.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .recall-flash {
+    animation: none;
+  }
+}

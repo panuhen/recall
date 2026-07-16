@@ -1,0 +1,8 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="re:call">
+  <!-- re:call mark: triangle outline, base's left end cut parallel to the left edge (retrieval notch). Theme-aware: dark on light, white on dark. -->
+  <style>
+    .mark { fill: #111214; }
+    @media (prefers-color-scheme: dark) { .mark { fill: #ffffff; } }
+  </style>
+  <path class="mark" d="M12.00,0.94 L23.70,22.00 L5.45,22.00 L6.56,20.00 L20.30,20.00 L12.00,5.06 L2.59,22.00 L0.30,22.00Z" />
+</svg>

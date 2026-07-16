@@ -1,0 +1,12 @@
+# Dev/test dependencies for the recall backend, installed ON TOP of the runtime
+# image (whose deps come from the hashed lock requirements.txt). These are the
+# test harness only — not shipped to prod — so they're kept as plain pinned
+# ranges here (no --require-hashes) and installed with a plain pip:
+#
+#   pip install -r requirements-dev.txt
+#
+# ruff (lint) is already a runtime-image dep via requirements.in, so it isn't
+# repeated here.
+
+pytest>=8,<9
+pytest-asyncio>=0.24,<0.27

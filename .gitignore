@@ -1,0 +1,42 @@
+# ── OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editors / IDEs ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Environment / secrets ───────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# Local Docker Compose overrides (e.g. flipping AUTH_MODE=dev for testing) —
+# machine-specific, must never reach a shared branch.
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Your real deployment script — copy of provision.example.sh with your own
+# subscription id, resource names, and tenant/app ids filled in. Keep it local.
+infra/provision.sh
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+
+# ── Node / Next.js ──────────────────────────────────────────
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/*.tsbuildinfo
+
+# ── Logs ────────────────────────────────────────────────────
+*.log
+

@@ -1,0 +1,8 @@
+# Normalize line endings to LF in the repo (files run in Linux containers).
+* text=auto eol=lf
+
+# Binary types git should not touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

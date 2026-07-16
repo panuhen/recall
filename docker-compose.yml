@@ -1,0 +1,83 @@
+name: recall
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-recall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recall}
+      POSTGRES_DB: ${POSTGRES_DB:-recall}
+    ports:
+      - "54324:5432"
+    volumes:
+      - recall_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-recall} -d ${POSTGRES_DB:-recall}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD:-recall}@postgres:5432/${POSTGRES_DB:-recall}
+      PYTHONPATH: /app
+    command: ["watchfiles", "python -m src.server", "src"]
+    ports:
+      - "8004:8765"
+    volumes:
+      - ./src:/app/src
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
+      # Mounted so the test suite can be run/iterated in the running container.
+      # The prod image installs only the runtime lock, so install the test deps
+      # once before running pytest:
+      #   docker compose exec backend pip install -r requirements-dev.txt
+      #   docker compose exec backend python -m pytest tests
+      # CI installs requirements-dev.txt itself (see azure-pipelines.yml).
+      - ./tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini
+      - ./requirements-dev.txt:/app/requirements-dev.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD:-recall}@postgres:5432/${POSTGRES_DB:-recall}
+      PYTHONPATH: /app
+    command: ["sh", "-c", "procrastinate --app=src.tasks.procrastinate_app schema --apply || true && procrastinate --app=src.tasks.procrastinate_app worker"]
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    environment:
+      BACKEND_URL: http://backend:8765
+      # Dev uses Webpack (`next dev --webpack`) because Turbopack's file watcher
+      # doesn't detect changes across the Windows→Docker bind mount. Webpack
+      # honors polling, which does work over the mount.
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  recall_pgdata:
