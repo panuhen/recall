@@ -86,7 +86,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
 
   return (
     <Dialog open={open} onClose={onClose} className="max-w-3xl overflow-hidden p-0">
-      <div className="flex h-[75vh] max-h-[34rem] flex-col md:h-[26rem] md:max-h-none md:flex-row">
+      <div className="flex h-[75vh] max-h-[36rem] flex-col md:h-[28rem] md:max-h-none md:flex-row">
         {/* Desktop: persistent left rail (Obsidian-style). Hidden on mobile. */}
         <nav className="hidden w-44 shrink-0 space-y-0.5 border-r bg-sidebar p-2 md:block">
           <div className="px-2 pb-1 pt-1.5 text-sm font-semibold">Settings</div>
@@ -204,6 +204,15 @@ function PreferencesSection() {
       title="Preferences"
       hint="What a note shows when you open it. Individual notes still remember changes you make to them."
     >
+      <Row
+        label="Recent notes on home"
+        hint="Show your most recently edited notes on the landing page."
+      >
+        <BoolSegmented
+          value={prefs.showRecentOnHome}
+          onChange={(v) => setPref("showRecentOnHome", v)}
+        />
+      </Row>
       <Row label="Properties" hint="Auto shows them only when a note has any.">
         <Segmented
           value={prefs.properties}

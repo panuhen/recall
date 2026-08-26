@@ -282,6 +282,16 @@ async def _current_user(request: Request):
     return user
 
 
+@mcp.custom_route("/api/notes/recent", methods=["GET"])
+async def api_recent_notes(request: Request) -> JSONResponse:
+    """Most recently updated notes across all the caller's workspaces."""
+    user = await _current_user(request)
+    if user is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    notes = await data.query_notes(user.id, limit=20)
+    return JSONResponse({"notes": notes})
+
+
 def _note_json(n: "data.Note") -> dict:
     return {
         "id": n.id,

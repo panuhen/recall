@@ -144,6 +144,11 @@ export type Revision = {
 };
 export type RevisionDetail = Revision & { body: string };
 
+export type RecentNote = NoteSummary & {
+  project_id: string;
+  project_name: string;
+};
+
 async function json<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()) as T;
@@ -183,6 +188,11 @@ export const search = (
     json<SearchResponse>(r),
   );
 };
+
+export const listRecentNotes = () =>
+  fetch(`/api/notes/recent`, { cache: "no-store" }).then((r) =>
+    json<{ notes: RecentNote[] }>(r),
+  );
 
 export const createNote = (
   projectId: string,

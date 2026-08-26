@@ -28,6 +28,7 @@ export type Preferences = {
   // default — a standard, expected enhancement for a markdown app.
   codeHighlight: boolean;
   orgWorkspaces: OrgWorkspacesMode;
+  showRecentOnHome: boolean;
 };
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -37,6 +38,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   metadata: false,
   codeHighlight: true,
   orgWorkspaces: "pinned",
+  showRecentOnHome: false,
 };
 
 // Defensive read: tolerate missing keys, bad JSON, and unknown values (private
@@ -53,6 +55,7 @@ export function readPreferences(): Preferences {
       metadata: p.metadata === true,
       codeHighlight: p.codeHighlight !== false, // default on when key is missing
       orgWorkspaces: p.orgWorkspaces === "all" ? "all" : "pinned",
+      showRecentOnHome: p.showRecentOnHome === true,
     };
   } catch {
     return { ...DEFAULT_PREFERENCES };
