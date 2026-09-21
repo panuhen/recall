@@ -8,6 +8,12 @@ Two paths:
   runs the browser OAuth flow against Entra and validates the returned JWT.
   `mcp_identity` reads the validated token's claims (falling back to the dev
   stub user when AUTH_MODE=dev, so /mcp is usable locally without OAuth).
+- MCP (from a trusted backend that already holds the user's identity): a
+  delegated Entra access token for this API, obtained by that backend via the
+  On-Behalf-Of flow, may be presented directly as the bearer. It is validated
+  by a plain `JWTVerifier` (see `_build_delegated_verifier`) chained after the
+  `AzureProvider`; the user is resolved from the same claims, so authorship
+  and workspace rights are the human's, never the backend's.
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ import logging
 from typing import Optional
 
 import jwt
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 from jwt import PyJWKClient
 from starlette.requests import Request
 
@@ -92,15 +99,49 @@ def verify_entra_token(token: str) -> Optional[dict]:
 # ── MCP OAuth (FastMCP AzureProvider) ───────────────────────
 
 
+def _build_delegated_verifier() -> Optional[JWTVerifier]:
+    """Build the verifier for *delegated* Entra tokens presented directly.
+
+    The ``AzureProvider`` is an OAuth *proxy*: it accepts only the tokens it
+    issued itself during a browser sign-in. A trusted backend that already
+    holds the user's identity (an agent platform, a chat host, an automation
+    server) instead exchanges the user's token for one audienced to this API
+    via the On-Behalf-Of flow and presents that Entra token as the bearer. This
+    verifier validates such a token against the tenant's JWKS / issuer /
+    audience and requires this app's own delegated scope(s) (``MCP_SCOPES``,
+    default ``access``) in ``scp``. The token carries the real user's ``oid`` /
+    ``preferred_username``, so ``mcp_identity`` resolves the human exactly as
+    for the browser flow. Returns ``None`` when the app isn't configured.
+    """
+    if not config.AZURE_TENANT_ID or not config.AZURE_CLIENT_ID:
+        return None
+    tenant = config.AZURE_TENANT_ID
+    audience = [config.AZURE_CLIENT_ID]
+    if config.AZURE_API_AUDIENCE:
+        audience.append(config.AZURE_API_AUDIENCE)
+    return JWTVerifier(
+        jwks_uri=f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys",
+        issuer=[
+            f"https://login.microsoftonline.com/{tenant}/v2.0",
+            f"https://sts.windows.net/{tenant}/",
+        ],
+        audience=audience,
+        algorithm="RS256",
+        required_scopes=config.MCP_SCOPES or ["access"],
+    )
+
+
 def build_mcp_auth():
     """Build the FastMCP auth provider for /mcp, or None to leave it open.
 
     Returns an ``AzureProvider`` (Entra OAuth via an OAuthProxy: one registered
     confidential app, browser consent, standard client discovery) when running
-    in "entra" mode with the client secret configured. Otherwise returns None so
-    /mcp is unauthenticated — the local-dev default, where `mcp_identity` serves
-    the stub user. Never raises: a misconfiguration logs a warning and degrades
-    to open rather than crashing the whole backend (REST included).
+    in "entra" mode with the client secret configured, wrapped in a
+    ``MultiAuth`` that also accepts delegated Entra tokens presented directly
+    (see :func:`_build_delegated_verifier`). Otherwise returns None so /mcp is
+    unauthenticated — the local-dev default, where `mcp_identity` serves the
+    stub user. Never raises: a misconfiguration logs a warning and degrades to
+    open rather than crashing the whole backend (REST included).
     """
     if config.AUTH_MODE != "entra":
         log.info("MCP auth: dev mode — /mcp is open, using the stub user")
@@ -122,6 +163,7 @@ def build_mcp_auth():
         )
         return None
     try:
+        from fastmcp.server.auth.auth import MultiAuth
         from fastmcp.server.auth.providers.azure import AzureProvider
 
         from .oauth_storage import build_client_storage
@@ -133,7 +175,7 @@ def build_mcp_auth():
         # (Graph scopes like User.Read would instead go in additional_authorize_
         # scopes, in full form; we don't need Graph here.)
         scopes = config.MCP_SCOPES or ["access"]
-        return AzureProvider(
+        server = AzureProvider(
             client_id=config.AZURE_CLIENT_ID,
             client_secret=config.AZURE_CLIENT_SECRET,
             tenant_id=config.AZURE_TENANT_ID,
@@ -145,8 +187,18 @@ def build_mcp_auth():
             # default per-process file store does neither. See oauth_storage.py.
             client_storage=build_client_storage(config.AZURE_CLIENT_SECRET),
         )
+        # MultiAuth tries the AzureProvider first (browser-issued tokens), then
+        # the delegated verifier (Entra tokens presented directly). Users
+        # authenticate exactly as before; the OAuth ceremony + metadata still
+        # come from AzureProvider. required_scopes=[] here because each
+        # component enforces its own scope requirement.
+        delegated_verifier = _build_delegated_verifier()
+        if delegated_verifier is None:
+            return server
+        log.info("MCP auth: direct delegated-token path enabled")
+        return MultiAuth(server=server, verifiers=[delegated_verifier], required_scopes=[])
     except Exception as exc:  # noqa: BLE001
-        log.error("MCP auth: failed to build AzureProvider (%s) — /mcp open", exc)
+        log.error("MCP auth: failed to build MCP auth provider (%s) — /mcp open", exc)
         return None
 
 

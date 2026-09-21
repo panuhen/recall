@@ -67,9 +67,34 @@ and fill in the Entra and Azure OpenAI values in `.env`.
 { "mcpServers": { "recall": { "type": "http", "url": "http://localhost:8004/mcp" } } }
 ```
 
+### MCP authentication modes (`AUTH_MODE=entra`)
+
+Two kinds of caller can reach `/mcp`, and both act **as a signed-in user** — re:call
+applies that user's workspace roles and records them as the author. There is no
+service-account or API-key path.
+
+| Caller | How it authenticates | Setup |
+|---|---|---|
+| Desktop / IDE assistants (Claude Desktop, Cursor, VS Code, …) | Standard MCP OAuth: the client discovers the server's metadata and the user signs in through a browser consent screen. FastMCP's `AzureProvider` proxies the flow against your Entra app. | Nothing beyond the Entra values in `.env`. |
+| A backend that already holds the user's identity (an agent platform, a chat host, an automation server) | Presents a **delegated Entra access token** for this API directly as `Authorization: Bearer …`. The backend obtains it with the [On-Behalf-Of flow](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-on-behalf-of-flow), exchanging the user's own token for one audienced to `api://<your-client-id>`. Validated against the tenant's JWKS; requires the app's `access` scope (or whatever `MCP_SCOPES` lists) in `scp`. | In Entra, the calling app needs the delegated permission `api://<your-client-id>/access` on this app, admin-consented. If the backend and re:call share one app registration, the backend's own user token already satisfies the verifier and no exchange is needed. |
+
+Quick check of the second mode with a token you hold yourself:
+
+```bash
+TOKEN=$(az account get-access-token --resource api://<your-client-id> --query accessToken -o tsv)
+curl -sS https://<your-recall-host>/mcp \
+  -H "Authorization: Bearer $TOKEN" -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```
+
+A `200` with a server description means the token was accepted as you. Tokens minted for
+another audience, without the scope, or app-only (client-credentials) tokens are rejected.
+
 ## Deployment
 
-`bash infra/provision.sh` provisions the stack on **Azure Container Apps** (MCP backend,
+Copy `infra/provision.example.sh` to `infra/provision.sh`, fill in its CONFIG block, and
+run it to provision the stack on **Azure Container Apps** (MCP backend,
 web BFF, worker, Postgres Flexible + pgvector, and Key Vault for secrets). CI/CD via
 [`azure-pipelines.yml`](azure-pipelines.yml) rebuilds both images and rolls out the new
 tag on every push to `main`. See [`infra/README.md`](infra/README.md) for the full
