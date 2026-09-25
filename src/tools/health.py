@@ -113,12 +113,24 @@ async def guide_for_agent(project_id: str) -> dict | None:
 
 
 async def write_feedback(note: "data.Note") -> dict:
-    """Extra keys for create_note/update_note responses: the guide's hints for
-    the note just written, only when there are any."""
+    """Extra keys for create_note/update_note responses. Whenever the workspace
+    has a guide, `workspace_guide` names it with its conventions, so an
+    assistant that wrote without calling `list_tree` still learns it exists;
+    `convention_hints` lists where this note departs from it (only when any)."""
     health = await data.note_health(note)
-    if not health["hints"]:
-        return {}
-    return {"convention_hints": health["hints"], "guide_id": health["guide_id"]}
+    extra: dict = {}
+    if health["guide_id"]:
+        guide = await data.get_guide(note.project_id)
+        if guide is not None:
+            extra["workspace_guide"] = {
+                "id": guide["id"],
+                "title": guide["title"],
+                "url": note_url(guide["id"]),
+                "conventions": guide["conventions"],
+            }
+    if health["hints"]:
+        extra["convention_hints"] = health["hints"]
+    return extra
 
 
 __all__ = ["register", "guide_for_agent", "write_feedback"]

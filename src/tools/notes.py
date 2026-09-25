@@ -78,7 +78,9 @@ def register(mcp: FastMCP) -> None:
         """Author a new markdown note in a workspace (editor+).
 
         Before creating, prefer `search` to check whether a note on the topic
-        already exists — updating an existing note beats a near-copy.
+        already exists — updating an existing note beats a near-copy. If you
+        haven't yet, call `list_tree` for the workspace: when it has a `guide`,
+        write the note the way the guide says (its types, tags and prose).
 
         Body is standard markdown; `[[wikilinks]]` become graph edges and YAML
         frontmatter (type/tags/status) is parsed automatically. Fenced ``` code
@@ -90,9 +92,12 @@ def register(mcp: FastMCP) -> None:
         near-identical to what you just wrote: read it, and prefer merging your
         content into it with `update_note` (then `delete` the redundant new
         note) unless the two genuinely need to stay separate.
-        If it carries `convention_hints`, the note departs from the workspace
-        guide (e.g. a misspelled tag) or has an unreadable `review_every`:
-        fix it with `update_note` unless the user asked for it that way.
+        `workspace_guide` (present when the workspace has a guide) names it and
+        lists its types and tags; if you hadn't read it, read it now with
+        `read_note` before writing more there. If the response carries
+        `convention_hints`, the note departs from the guide (e.g. a misspelled
+        tag) or has an unreadable `review_every`: fix it with `update_note`
+        unless the user asked for it that way.
 
         Diagrams: put a ```mermaid fenced code block in the body and recall
         renders it (flowchart, sequence, class, state, ER, gantt, mindmap, …).

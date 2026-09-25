@@ -593,9 +593,35 @@ async def test_mcp_guide_in_tree_and_hints_on_write(tools, make_user, make_proje
     created = await (await get("create_note"))(
         proj.id, "Ops", "---\ntype: note\ntags: [infrastructure]\n---\nx")
     assert [h["code"] for h in created["convention_hints"]] == ["tag_not_declared"]
-    assert created["guide_id"] == g.id
+    assert created["workspace_guide"]["id"] == g.id
+    assert created["workspace_guide"]["url"] == f"{APP}/notes/{g.id}"
+    assert created["workspace_guide"]["conventions"]["types"] == ["runbook", "decision", "note"]
     updated = await (await get("update_note"))(
         created["id"], body="---\ntype: note\ntags: [infra]\n---\nx")
+    # A clean write still names the guide, so it can't be missed.
     assert "convention_hints" not in updated
+    assert updated["workspace_guide"]["id"] == g.id
     read = await (await get("read_note"))(created["id"])
     assert read["convention_hints"] == [] and read["review"] is None
+
+
+async def test_creating_the_missing_note_clears_the_link(make_user, make_project):
+    # The web app's "click a missing link" creates a note with the link's title;
+    # the waiting link must resolve at once and leave the Health list.
+    user = await make_user()
+    proj = await make_project(user)
+    src = await data.create_note(proj.id, "Ops", "See [[Session storage#Why]].", user.id)
+    assert [b["target_title"] for b in (await data.workspace_health(proj.id))["broken_links"]] == [
+        "Session storage"]
+    created = await data.create_note(proj.id, "Session storage", "", user.id)
+    assert (await data.workspace_health(proj.id))["broken_links"] == []
+    assert [b["id"] for b in await data.get_backlinks(created.id)] == [src.id]
+
+
+async def test_mcp_write_without_guide_has_no_guide_keys(tools, make_user, make_project):
+    as_user, get = tools
+    owner = await make_user()
+    proj = await make_project(owner)
+    as_user(owner)
+    created = await (await get("create_note"))(proj.id, "Plain", "x")
+    assert "workspace_guide" not in created and "convention_hints" not in created

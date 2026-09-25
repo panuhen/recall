@@ -26,7 +26,7 @@ export function countLabel(key: HealthListKey, n: number): string {
     case "owner_left":
       return plural(n, "owner left", "owners left");
     case "broken_links":
-      return plural(n, "broken link", "broken links");
+      return plural(n, "missing link", "missing links");
     case "old_drafts":
       return plural(n, "old draft", "old drafts");
     case "not_edited":
@@ -44,7 +44,9 @@ export function listTitle(key: HealthListKey, staleMonths: number): string {
     case "owner_left":
       return "Owner has left";
     case "broken_links":
-      return "Broken links";
+      // Mostly placeholders for notes not written yet (normal in markdown
+      // tools), so not worded as errors. Trashed targets say so per row.
+      return "Links to notes that don’t exist";
     case "old_drafts":
       return `Drafts untouched for ${staleMonths} months`;
     case "not_edited":

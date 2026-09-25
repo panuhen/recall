@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import {
+  createNote,
   getNote,
   getRelated,
   getRevision,
@@ -199,13 +200,38 @@ export default function NotePage({
   // to the tab set on load and this note's tab stays put — the "new tab" default.
   const openNote = useCallback((id: string) => router.push(`/notes/${id}`), [router]);
 
+  // A link to a note that doesn't exist yet: create it (Obsidian's behaviour)
+  // next to this note and open it. Saving first puts the link on the server,
+  // so the new note claims it and the link starts working at once.
+  const creatingFromLink = useRef(false);
+  // doSave is defined further down (it depends on state declared there).
+  const doSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const createFromLink = useCallback(
+    async (target: string) => {
+      const title = target.split("#")[0].trim();
+      if (!title || !note || creatingFromLink.current) return;
+      creatingFromLink.current = true;
+      try {
+        await doSaveRef.current?.();
+        const created = await createNote(note.project_id, title, "", note.folder_id);
+        openNote(created.id);
+      } catch {
+        toast("Couldn’t create the note", "error");
+      } finally {
+        creatingFromLink.current = false;
+      }
+    },
+    [note, openNote, toast],
+  );
+
   const followLink = useCallback(
     (target: string) => {
       const id = resolveLink(target);
       if (id) openNote(id);
+      else if (note?.can_edit ?? true) void createFromLink(target);
       else toast("No note titled that in this workspace", "error");
     },
-    [resolveLink, openNote, toast],
+    [resolveLink, openNote, createFromLink, note?.can_edit, toast],
   );
 
   // Last-persisted content, and a live mirror of the current edits so the
@@ -379,6 +405,10 @@ export default function NotePage({
       }
     }
   }, [noteId]);
+
+  useEffect(() => {
+    doSaveRef.current = doSave;
+  }, [doSave]);
 
   // Debounced autosave whenever the content diverges from what's persisted.
   useEffect(() => {
@@ -799,6 +829,7 @@ export default function NotePage({
                       body={body}
                       resolveLink={resolveLink}
                       onOpenNote={openNote}
+                      onCreateNote={canEdit ? (t) => void createFromLink(t) : undefined}
                       highlight={codeHighlight}
                     />
                   ) : (

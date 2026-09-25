@@ -207,7 +207,7 @@ function rowsFor(key: HealthListKey, h: WorkspaceHealth): Row[] {
         key: `${b.id}:${b.target_title}`,
         id: b.id,
         title: b.title,
-        detail: `→ [[${b.target_title}]] ${b.reason === "trashed" ? "(in trash)" : "(missing)"}`,
+        detail: `→ [[${b.target_title}]] · ${b.reason === "trashed" ? "in trash" : "not created yet"}`,
       }));
     case "old_drafts":
     case "not_edited":

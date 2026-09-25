@@ -19,7 +19,7 @@ describe("healthSummary", () => {
       healthSummary({ orphans: 3, overdue: 2, broken_links: 1, not_edited: 0 }).map(
         (s) => s.label,
       ),
-    ).toEqual(["2 overdue", "1 broken link", "3 orphans"]);
+    ).toEqual(["2 overdue", "1 missing link", "3 orphans"]);
   });
 
   it("is empty when everything is healthy", () => {

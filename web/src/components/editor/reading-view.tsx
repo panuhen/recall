@@ -66,11 +66,15 @@ export function ReadingView({
   body,
   resolveLink,
   onOpenNote,
+  onCreateNote,
   highlight = true,
 }: {
   body: string;
   resolveLink?: LinkResolver;
   onOpenNote?: (id: string) => void;
+  // Click on a link to a note that doesn't exist yet → create it (editors
+  // only; without it such links stay inert).
+  onCreateNote?: (target: string) => void;
   // Syntax-highlight rendered code blocks (Settings → Appearance). When off,
   // code blocks render as plain monospace.
   highlight?: boolean;
@@ -91,7 +95,8 @@ export function ReadingView({
               const id = resolveLink?.(target) ?? null;
               // Resolved → a clickable link that opens the target note (a plain
               // click here navigates; the source stays open as a tab). Unresolved
-              // → inert, dimmed, with a hint, mirroring Obsidian's dead links.
+              // → dimmed like Obsidian's; clicking creates the note when the
+              // reader may edit, else it's inert.
               if (id && onOpenNote) {
                 return (
                   <span
@@ -103,6 +108,25 @@ export function ReadingView({
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         onOpenNote(id);
+                      }
+                    }}
+                  >
+                    {children}
+                  </span>
+                );
+              }
+              if (onCreateNote) {
+                return (
+                  <span
+                    role="link"
+                    tabIndex={0}
+                    className="md-wikilink md-wikilink-dead cursor-pointer"
+                    title="No note with this title yet. Click to create it"
+                    onClick={() => onCreateNote(target)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onCreateNote(target);
                       }
                     }}
                   >
