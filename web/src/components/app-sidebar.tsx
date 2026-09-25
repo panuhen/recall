@@ -1635,7 +1635,9 @@ export function AppSidebar({ authMode }: { authMode: string }) {
           openMenu(e, isOrg ? orgProjectMenu(p, pinned) : projectMenu(p))
         }
         className={cn(
-          "rounded-md",
+          // p-1 always, so the outline below has breathing room around the
+          // rows and opening a note elsewhere doesn't shift the list.
+          "rounded-lg p-1",
           isDropTarget && "bg-sidebar-accent ring-1 ring-primary/50",
           // A quiet outline around the workspace holding the open note (or
           // whose page is open), distinct from the row highlight.
