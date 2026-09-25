@@ -95,6 +95,7 @@ import { importMarkdownFiles, partitionFiles } from "@/lib/import-markdown";
 import { useRevalidate } from "@/lib/revalidate";
 import { useCopyLink } from "@/lib/use-copy-link";
 import { type OrgWorkspacesMode, readPreferences } from "@/lib/use-preferences";
+import { type CreateTarget, describeTarget, resolveCreateTarget } from "@/lib/create-target";
 import { cn } from "@/lib/utils";
 
 type Project = {
@@ -389,32 +390,45 @@ export function AppSidebar({ authMode }: { authMode: string }) {
     typeof params.projectId === "string" ? params.projectId : null;
   // The workspace the open note belongs to, for the outline around its block.
   // Learned from a loaded tree when possible; otherwise from the note itself.
-  const [noteProject, setNoteProject] = useState<{ noteId: string; projectId: string } | null>(
-    null,
-  );
-  const treeProjectId = useMemo(() => {
+  const [noteProject, setNoteProject] = useState<
+    ({ noteId: string } & CreateTarget) | null
+  >(null);
+  const treeNoteLocation = useMemo((): CreateTarget | null => {
     if (!activeNoteId) return null;
     for (const [pid, t] of Object.entries(trees)) {
-      if (t && typeof t === "object" && t.notes.some((n) => n.id === activeNoteId)) return pid;
+      if (t && typeof t === "object") {
+        const hit = t.notes.find((n) => n.id === activeNoteId);
+        if (hit) return { projectId: pid, folderId: hit.folder_id };
+      }
     }
     return null;
   }, [activeNoteId, trees]);
   useEffect(() => {
-    if (!activeNoteId || treeProjectId || noteProject?.noteId === activeNoteId) return;
+    if (!activeNoteId || treeNoteLocation || noteProject?.noteId === activeNoteId) return;
     let cancelled = false;
     getNote(activeNoteId)
       .then((n) => {
-        if (!cancelled) setNoteProject({ noteId: activeNoteId, projectId: n.project_id });
+        if (!cancelled)
+          setNoteProject({ noteId: activeNoteId, projectId: n.project_id, folderId: n.folder_id });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [activeNoteId, treeProjectId, noteProject?.noteId]);
+  }, [activeNoteId, treeNoteLocation, noteProject?.noteId]);
+  const noteLocation: CreateTarget | null =
+    treeNoteLocation ??
+    (noteProject?.noteId === activeNoteId && noteProject
+      ? { projectId: noteProject.projectId, folderId: noteProject.folderId }
+      : null);
+  // The workspace or folder row last clicked in the sidebar. It targets the
+  // toolbar's New note / New folder until the user opens another note or page.
+  const [sidebarFocus, setSidebarFocus] = useState<CreateTarget | null>(null);
+  useEffect(() => {
+    setSidebarFocus(null);
+  }, [activeNoteId, activeProjectId]);
   const currentProjectId =
-    activeProjectId ??
-    treeProjectId ??
-    (noteProject?.noteId === activeNoteId ? noteProject.projectId : null);
+    sidebarFocus?.projectId ?? activeProjectId ?? noteLocation?.projectId ?? null;
   // The default target for the toolbar's quick New note / New folder actions.
   const personalId = state.kind === "ready" ? state.me.personal_project_id : "";
   const anyExpanded = expanded.size > 0;
@@ -1541,7 +1555,10 @@ export function AppSidebar({ authMode }: { authMode: string }) {
           ) : (
             <button
               type="button"
-              onClick={() => toggle(f.id)}
+              onClick={() => {
+                setSidebarFocus({ projectId: p.id, folderId: f.id });
+                toggle(f.id);
+              }}
               className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-sm"
             >
               <ChevronRight
@@ -1590,6 +1607,28 @@ export function AppSidebar({ authMode }: { authMode: string }) {
   const me = state.kind === "ready" ? state.me : null;
   const personalProject = me?.projects.find((p) => p.is_personal) ?? null;
   const workspaceProjects = me ? me.projects.filter((p) => !p.is_personal) : [];
+
+  // Toolbar New note / New folder target (see lib/create-target.ts). Only
+  // memberships with editor+ rights qualify; org-visible workspaces you only
+  // view fall back to Personal.
+  const createTarget = resolveCreateTarget({
+    focus: sidebarFocus,
+    note: noteLocation,
+    workspacePage: activeProjectId,
+    personalId,
+    canWrite: (id) => !!me?.projects.some((p) => p.id === id && canWrite(p.role)),
+    folderExists: (pid, fid) => {
+      const t = trees[pid];
+      return !t || typeof t !== "object" || t.folders.some((f) => f.id === fid);
+    },
+  });
+  const createTargetProject = me?.projects.find((p) => p.id === createTarget.projectId);
+  const createTargetTree = trees[createTarget.projectId];
+  const createTargetLabel = describeTarget(
+    createTargetProject?.name ?? "Personal",
+    createTarget.folderId,
+    createTargetTree && typeof createTargetTree === "object" ? createTargetTree.folders : undefined,
+  );
 
   const renderLevel = (p: Project, tree: Tree, parentId: string | null): ReactNode => {
     const folders = tree.folders
@@ -1666,7 +1705,10 @@ export function AppSidebar({ authMode }: { authMode: string }) {
           ) : (
             <button
               type="button"
-              onClick={() => toggle(p.id, () => tree === undefined && loadTree(p.id))}
+              onClick={() => {
+                setSidebarFocus({ projectId: p.id, folderId: null });
+                toggle(p.id, () => tree === undefined && loadTree(p.id));
+              }}
               className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-sm"
             >
               <ChevronRight
@@ -1827,8 +1869,9 @@ export function AppSidebar({ authMode }: { authMode: string }) {
       </div>
 
       {/* Band 2 — toolbar; aligns with the note header ribbon (h-11). New note /
-          New folder default to the Personal workspace; New workspace makes a new
-          top-level (shareable) one. */}
+          New folder create where you're working (createTarget: the last clicked
+          workspace/folder, else the open note's folder, else Personal); New
+          workspace makes a new top-level (shareable) one. */}
       <div className="flex h-11 shrink-0 items-center gap-1 px-2">
         {state.kind === "ready" && (
           <>
@@ -1844,18 +1887,18 @@ export function AppSidebar({ authMode }: { authMode: string }) {
             </button>
             <button
               type="button"
-              onClick={() => startNewFolder(personalId, null)}
-              aria-label="New folder"
-              title="New folder"
+              onClick={() => startNewFolder(createTarget.projectId, createTarget.folderId)}
+              aria-label={`New folder in ${createTargetLabel}`}
+              title={`New folder in ${createTargetLabel}`}
               className={TOOLBAR_BTN}
             >
               <FolderPlus size={20} />
             </button>
             <button
               type="button"
-              onClick={() => newNote(personalId, null)}
-              aria-label="New note"
-              title="New note"
+              onClick={() => newNote(createTarget.projectId, createTarget.folderId)}
+              aria-label={`New note in ${createTargetLabel}`}
+              title={`New note in ${createTargetLabel}`}
               className={TOOLBAR_BTN}
             >
               <FilePlus size={20} />
