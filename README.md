@@ -156,6 +156,11 @@ so both use the new settings.
 { "mcpServers": { "recall": { "type": "http", "url": "http://localhost:8004/mcp" } } }
 ```
 
+Tool results for notes and workspaces include a `url` on the web app (for
+example `https://recall.example.com/notes/<id>`), so an assistant can hand people
+a link. The backend builds it from `APP_URL`, falling back to `BETTER_AUTH_URL`;
+with neither set, `url` is null. A link grants no access by itself.
+
 ### MCP callers in `AUTH_MODE=entra`
 
 Two kinds of caller can reach `/mcp`, and both act **as a signed-in user** — re:call

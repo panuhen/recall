@@ -283,6 +283,10 @@ retry az containerapp update -g "$RG" -n "$APP_WEB" \
   --image "$WEB_IMG" \
   --set-env-vars "AUTH_REDIRECT_URI=https://${WEB_FQDN}/api/auth/callback" \
                  "AUTH_POST_LOGOUT_REDIRECT_URI=https://${WEB_FQDN}" -o none
+# The MCP backend returns shareable note/workspace links on the web host.
+retry az containerapp update -g "$RG" -n "$APP_MCP" \
+  --image "$BACKEND_IMG" \
+  --set-env-vars "APP_URL=https://${WEB_FQDN}" -o none
 
 # ── Register the web + MCP redirect URIs on the Entra app (may need admin) ─────
 echo ">> Registering redirect URIs on Entra app $AZURE_CLIENT_ID (non-fatal)"

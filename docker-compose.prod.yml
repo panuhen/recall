@@ -49,6 +49,9 @@ services:
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
       BETTER_AUTH_INTERNAL_URL: http://web:3000
+      # Web origin for the shareable links MCP tools return; defaults to
+      # BETTER_AUTH_URL.
+      APP_URL: ${APP_URL:-}
       # entra mode only.
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}

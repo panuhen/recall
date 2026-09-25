@@ -9,6 +9,7 @@ assistant gets a legible signal instead of an exception.
 from __future__ import annotations
 
 from .. import auth, data
+from ..links import note_url
 
 UNAUTH: dict = {"error": "unauthenticated"}
 NOT_FOUND: dict = {"error": "not_found"}
@@ -67,6 +68,7 @@ def note_dict(n, **extra) -> dict:
         "updated_by": n.updated_by,
         "created_via": n.created_via,
         "updated_via": n.updated_via,
+        "url": note_url(n.id),
     }
     d.update(extra)
     return d

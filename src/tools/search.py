@@ -5,6 +5,7 @@ from fastmcp import FastMCP
 
 from .. import data
 from ..embeddings_provider import embed_query
+from ..links import with_note_urls
 from ._base import NOT_FOUND, UNAUTH, note_and_role, resolve_user
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
@@ -34,7 +35,7 @@ def register(mcp: FastMCP) -> None:
         limit = max(1, min(int(limit or 20), 50))
         qvec = await embed_query(q)
         results = await data.search_notes(user.id, q, qvec, project_id, limit)
-        return {"results": results, "semantic": qvec is not None}
+        return {"results": with_note_urls(results), "semantic": qvec is not None}
 
     @mcp.tool(title="Query notes by metadata", annotations=_READ)
     async def query_notes(
@@ -66,7 +67,7 @@ def register(mcp: FastMCP) -> None:
             user.id, project_id=project_id, type=type, tags=tags,
             status=status, limit=limit,
         )
-        return {"notes": notes}
+        return {"notes": with_note_urls(notes)}
 
     @mcp.tool(title="Suggest links for a note", annotations=_READ)
     async def suggest_links(note_id: str, limit: int = 8) -> dict:
@@ -85,4 +86,4 @@ def register(mcp: FastMCP) -> None:
         if note is None or role is None:
             return NOT_FOUND
         limit = max(1, min(int(limit or 8), 25))
-        return {"candidates": await data.suggest_links(note_id, limit)}
+        return {"candidates": with_note_urls(await data.suggest_links(note_id, limit))}

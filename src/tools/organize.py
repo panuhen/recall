@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from .. import data
+from ..links import with_note_urls, workspace_url
 from ._base import (
     FORBIDDEN,
     NOT_FOUND,
@@ -36,6 +37,7 @@ def _project_dict(p) -> dict:
         "org_access": p.org_access,
         "member_count": p.member_count,
         "updated_at": p.updated_at,
+        "url": workspace_url(p.id),
     }
 
 
@@ -132,7 +134,7 @@ def register(mcp: FastMCP) -> None:
             return NOT_FOUND
         return {
             "folders": await data.list_folders(project_id),
-            "notes": await data.list_notes(project_id),
+            "notes": with_note_urls(await data.list_notes(project_id)),
         }
 
     @mcp.tool(title="Create a folder", annotations=_WRITE)

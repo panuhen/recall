@@ -80,6 +80,9 @@ INSTRUCTIONS = (
     "renders it in the UI (flowchart, sequence, class, state, ER, gantt, "
     "mindmap, and more). Validate a diagram with `preview_diagram` before "
     "create_note/update_note so it renders cleanly for readers. "
+    "Notes and workspaces carry a `url`: a web link to share with people (null "
+    "when the server has no APP_URL). A link grants no access; the reader needs "
+    "access to the workspace. "
     "You act as the signed-in user and see only workspaces they can access; "
     "writes require editor or owner."
 )

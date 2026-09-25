@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 
 from .. import data
 from ..embeddings_provider import build_embed_text, embed_query
+from ..links import with_note_urls
 from ._base import (
     FORBIDDEN,
     NOT_FOUND,
@@ -36,7 +37,7 @@ async def _candidates(note: "data.Note", limit: int = 8) -> list[dict]:
     scores are comparable to note-to-note similarity."""
     try:
         qvec = await embed_query(build_embed_text(note.title, note.body, note.tags, note.type))
-        return await data.neighbors_for_text(note.project_id, qvec, note.id, limit)
+        return with_note_urls(await data.neighbors_for_text(note.project_id, qvec, note.id, limit))
     except Exception:  # noqa: BLE001 — candidates are a nicety, not the write
         return []
 

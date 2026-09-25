@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from .. import data
+from ..links import with_workspace_urls
 from ._base import FORBIDDEN, NOT_FOUND, UNAUTH, resolve_user
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
@@ -127,4 +128,4 @@ def register(mcp: FastMCP) -> None:
         user = await resolve_user()
         if user is None:
             return UNAUTH
-        return {"workspaces": await data.list_org_projects(user.id)}
+        return {"workspaces": with_workspace_urls(await data.list_org_projects(user.id))}

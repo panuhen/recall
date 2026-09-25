@@ -86,6 +86,12 @@ MCP_SCOPES = [
 # it byte-identical to the issuer in Better Auth's own authorization-server
 # metadata, or strict clients (Claude.ai) refuse to register.
 BETTER_AUTH_URL = os.environ.get("BETTER_AUTH_URL", "")
+
+# Public origin of the web app (scheme + host, no trailing slash). MCP tools use
+# it to return shareable `url`s for notes and workspaces. Falls back to
+# BETTER_AUTH_URL, which is the web origin in betterauth mode; when neither is
+# set, `url` is null.
+APP_URL = (os.environ.get("APP_URL", "") or BETTER_AUTH_URL).rstrip("/")
 # Where this backend reaches the web app for token validation. Inside compose
 # that's the service name (http://web:3000), not the public origin.
 BETTER_AUTH_INTERNAL_URL = (
