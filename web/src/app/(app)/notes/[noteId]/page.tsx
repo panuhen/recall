@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   Clock,
   Code,
+  FolderOpen,
   History,
+  Link as LinkIcon,
   Link2,
   List,
   Lock,
@@ -49,6 +51,7 @@ import { updateFrontmatter, type FrontmatterValue } from "@/lib/frontmatter";
 import { useRevalidate } from "@/lib/revalidate";
 import { slugify } from "@/lib/slugify";
 import { absoluteTime, relativeTime } from "@/lib/time";
+import { useCopyLink } from "@/lib/use-copy-link";
 import { readPreferences } from "@/lib/use-preferences";
 
 const MarkdownEditor = dynamic(
@@ -144,6 +147,7 @@ export default function NotePage({
   const router = useRouter();
   const confirm = useConfirm();
   const { toast } = useToast();
+  const copyLink = useCopyLink();
 
   // Other notes in this workspace — the index that resolves `[[wikilinks]]` to a
   // note id and (later) feeds the link picker. Links only resolve within a
@@ -645,6 +649,17 @@ export default function NotePage({
                     },
                   ]
                 : []),
+              { divider: true as const },
+              {
+                label: "Copy link",
+                icon: <LinkIcon size={16} />,
+                onClick: () => void copyLink("note", noteId),
+              },
+              {
+                label: "Open workspace",
+                icon: <FolderOpen size={16} />,
+                onClick: () => router.push(`/projects/${note.project_id}`),
+              },
             ]}
           />
         </div>

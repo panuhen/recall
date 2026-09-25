@@ -149,10 +149,32 @@ export type RecentNote = NoteSummary & {
   project_name: string;
 };
 
+// A non-2xx response. `status` lets a page tell "no access" (403/404) apart
+// from a failure. Message and name stay those of the plain `Error("HTTP …")`
+// it replaces, so existing `String(e)` displays read the same.
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`HTTP ${status}`);
+    this.status = status;
+  }
+}
+
 async function json<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw new HttpError(r.status);
   return (await r.json()) as T;
 }
+
+// The signed-in user and their memberships (the sidebar's source). Also
+// provisions the user + personal workspace and accepts pending invitations.
+export type MeResponse = {
+  user: { id: string; upn: string; name: string | null };
+  personal_project_id: string;
+  projects: ProjectSummary[];
+};
+
+export const getMe = () =>
+  fetch(`/api/me`, { cache: "no-store" }).then((r) => json<MeResponse>(r));
 
 export const createProject = (name: string) =>
   fetch(`/api/projects`, {

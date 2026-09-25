@@ -1,6 +1,15 @@
 "use client";
 
-import { Globe, Loader2, Lock, LogOut, UserPlus, Users, X } from "lucide-react";
+import {
+  Globe,
+  Link as LinkIcon,
+  Loader2,
+  Lock,
+  LogOut,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -13,6 +22,7 @@ import {
 } from "react";
 
 import { NoteMenu } from "@/components/note-menu";
+import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
@@ -32,6 +42,7 @@ import {
   type ShareRole,
   updateMemberRole,
 } from "@/lib/api";
+import { useCopyLink } from "@/lib/use-copy-link";
 import { cn } from "@/lib/utils";
 
 // Owns the ShareDialog's open state (which workspace is being shared) and
@@ -80,6 +91,7 @@ function ShareDialog({
   const [access, setAccess] = useState<OrgAccess>("none");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const copyLink = useCopyLink();
 
   const projectId = target?.id ?? null;
 
@@ -161,6 +173,24 @@ function ShareDialog({
             />
           </>
         ) : null}
+      </div>
+
+      {/* Drive-style footer: the workspace link, then Done. The link grants no
+          access — it opens the workspace page for members (or anyone in the
+          org when it's org-visible). */}
+      <div className="mt-5 flex items-center justify-between gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => projectId && void copyLink("project", projectId)}
+          disabled={!projectId}
+        >
+          <LinkIcon size={14} />
+          Copy link
+        </Button>
+        <Button size="sm" onClick={onClose}>
+          Done
+        </Button>
       </div>
     </Dialog>
   );

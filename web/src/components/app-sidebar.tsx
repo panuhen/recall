@@ -10,8 +10,10 @@ import {
   Download,
   FilePlus,
   Files,
+  FolderOpen,
   FolderPlus,
   Globe,
+  Link as LinkIcon,
   LogOut,
   MoreHorizontal,
   Network,
@@ -91,6 +93,7 @@ import {
 } from "@/lib/export-markdown";
 import { importMarkdownFiles, partitionFiles } from "@/lib/import-markdown";
 import { useRevalidate } from "@/lib/revalidate";
+import { useCopyLink } from "@/lib/use-copy-link";
 import { type OrgWorkspacesMode, readPreferences } from "@/lib/use-preferences";
 import { cn } from "@/lib/utils";
 
@@ -381,6 +384,9 @@ export function AppSidebar({ authMode }: { authMode: string }) {
   const router = useRouter();
   const params = useParams();
   const activeNoteId = typeof params.noteId === "string" ? params.noteId : null;
+  // The workspace whose landing page (/projects/<id>) is open, if any.
+  const activeProjectId =
+    typeof params.projectId === "string" ? params.projectId : null;
   // The default target for the toolbar's quick New note / New folder actions.
   const personalId = state.kind === "ready" ? state.me.personal_project_id : "";
   const anyExpanded = expanded.size > 0;
@@ -393,6 +399,7 @@ export function AppSidebar({ authMode }: { authMode: string }) {
   const { openShare } = useShare();
   const { openBrowse } = useBrowse();
   const { toast } = useToast();
+  const copyLink = useCopyLink();
   // Below `md` the sidebar is an off-canvas drawer; this drives its slide + scrim.
   const { open: navOpen, setOpen: setNavOpen } = useMobileNav();
 
@@ -760,6 +767,25 @@ export function AppSidebar({ authMode }: { authMode: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.kind]);
 
+  // Opening a workspace's landing page (/projects/<id>, e.g. from a copied
+  // link) expands its row, loads its tree and flashes it — once per visit, so
+  // collapsing it while the page stays open still works. Only for a workspace
+  // that has a row here (a membership, or a listed org workspace); a link to
+  // one you can't open reveals nothing.
+  const activeHasRow =
+    !!activeProjectId &&
+    state.kind === "ready" &&
+    (state.me.projects.some((p) => p.id === activeProjectId) ||
+      (orgMode === "all" ? allOrg : allOrg.filter((o) => o.pinned)).some(
+        (o) => o.id === activeProjectId,
+      ));
+  useEffect(() => {
+    if (activeProjectId && activeHasRow) revealProject(activeProjectId);
+    // Runs when the page or its row's availability changes, not on every tree
+    // update revealProject closes over.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId, activeHasRow]);
+
   // Restore the saved sort order.
   useEffect(() => {
     const saved = localStorage.getItem(SORT_KEY);
@@ -867,6 +893,12 @@ export function AppSidebar({ authMode }: { authMode: string }) {
     openTab(id, title);
     router.push(`/notes/${id}`);
     setNavOpen(false); // dismiss the mobile drawer once you're headed to a note
+  }
+
+  // The workspace landing page. Clicking the row itself still only toggles.
+  function openWorkspace(id: string) {
+    router.push(`/projects/${id}`);
+    setNavOpen(false);
   }
 
   // ── Create ────────────────────────────────────────────────
@@ -1110,6 +1142,16 @@ export function AppSidebar({ authMode }: { authMode: string }) {
     // "Open graph" is a read view — available to every member (incl. viewers).
     const items: MenuItem[] = [
       {
+        label: "Open workspace",
+        icon: <FolderOpen size={15} />,
+        onSelect: () => openWorkspace(p.id),
+      },
+      {
+        label: "Copy link",
+        icon: <LinkIcon size={15} />,
+        onSelect: () => void copyLink("project", p.id),
+      },
+      {
         label: "Open graph",
         icon: <Waypoints size={15} />,
         onSelect: () => openDock(p.id),
@@ -1171,6 +1213,16 @@ export function AppSidebar({ authMode }: { authMode: string }) {
   // read actions only, plus pin/unpin to keep it in your sidebar.
   function orgProjectMenu(p: Project, pinned: boolean): MenuItem[] {
     return [
+      {
+        label: "Open workspace",
+        icon: <FolderOpen size={15} />,
+        onSelect: () => openWorkspace(p.id),
+      },
+      {
+        label: "Copy link",
+        icon: <LinkIcon size={15} />,
+        onSelect: () => void copyLink("project", p.id),
+      },
       { label: "Open graph", icon: <Waypoints size={15} />, onSelect: () => openDock(p.id) },
       {
         label: "Export workspace",
@@ -1238,6 +1290,11 @@ export function AppSidebar({ authMode }: { authMode: string }) {
 
   function noteMenu(n: NoteSummary, p: Project): MenuItem[] {
     const items: MenuItem[] = [
+      {
+        label: "Copy link",
+        icon: <LinkIcon size={15} />,
+        onSelect: () => void copyLink("note", n.id),
+      },
       {
         label: "Download .md",
         icon: <Download size={15} />,
@@ -1555,7 +1612,14 @@ export function AppSidebar({ authMode }: { authMode: string }) {
           flash === `ws-${p.id}` && "recall-flash",
         )}
       >
-        <div className="group flex items-center rounded-md pr-1 hover:bg-sidebar-accent">
+        <div
+          className={cn(
+            "group flex items-center rounded-md pr-1 hover:bg-sidebar-accent",
+            // Its landing page is open (highlighted like the active note).
+            p.id === activeProjectId && "bg-sidebar-accent text-foreground",
+          )}
+          aria-current={p.id === activeProjectId ? "page" : undefined}
+        >
           {isRenaming ? (
             <div className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5">
               <ChevronRight size={16} className="shrink-0 text-muted-foreground opacity-40" />
@@ -1689,8 +1753,8 @@ export function AppSidebar({ authMode }: { authMode: string }) {
         // Below md: an off-canvas drawer that slides in from the left.
         "fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] transition-transform duration-200 ease-out",
         navOpen ? "translate-x-0" : "-translate-x-full",
-        // md+: the static rail, unchanged.
-        "md:static md:z-auto md:w-64 md:max-w-none md:translate-x-0 md:transition-none",
+        // md+: the static rail, a fixed 288px.
+        "md:static md:z-auto md:w-72 md:max-w-none md:translate-x-0 md:transition-none",
       )}
       // Clears the highlight when the cursor is over the sidebar but not a valid
       // drop target (targets call stopPropagation, so this only fires elsewhere).
