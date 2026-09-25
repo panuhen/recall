@@ -31,8 +31,8 @@ const LABEL_ZOOM = 1.5;
 const BASE_R: Record<GraphViewKind, number> = { project: 7, folder: 4.5, note: 2.5 };
 // Wikilink arrowhead geometry, in graph (world) units, so it scales with the
 // nodes. Length along the edge + half-width across it.
-const ARROW_LEN = 2;
-const ARROW_HALF = 0.8;
+const ARROW_LEN = 1;
+const ARROW_HALF = 0.4;
 
 type Colors = { fg: string; muted: string; font: string };
 
