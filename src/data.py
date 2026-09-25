@@ -13,7 +13,11 @@ from .auth import mcp_client_name
 from .embeddings_provider import to_pgvector
 from .markdown import (
     UNSAFE_WIKILINK_TITLE_CHARS,
+    MentionMatcher,
     extract_wikilinks,
+    mention_link_text,
+    mention_snippet,
+    mention_terms,
     parse_frontmatter,
     project_metadata,
     rewrite_wikilink_target,
@@ -1803,6 +1807,122 @@ async def get_outbound_links(note_id: str) -> list[dict]:
         for r in rows
     ]
 
+
+
+# ── Unlinked mentions ───────────────────────────────────────
+# Notes that name another note in plain text without linking it. Matching
+# rules live in markdown.py (MentionMatcher); here: scope + SQL prefilter, and
+# the one-mention linker that goes through the normal update path.
+
+UNLINKED_MENTIONS_MAX = 50
+
+
+class MentionLinkError(Exception):
+    """link_unlinked_mention refused: `code` is one of not_found (either note
+    missing/trashed, same note, or different workspaces), already_linked (the
+    source already links the target), no_mention (no plain mention left to
+    link) or unlinkable_title (the target's title can't be a wikilink)."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+async def get_unlinked_mentions(note_id: str, limit: int = UNLINKED_MENTIONS_MAX) -> list[dict]:
+    """Live notes in the same workspace whose body mentions this note's title
+    or one of its frontmatter `aliases` in plain prose (see MentionMatcher and
+    mention_masked_spans for what counts) but that have no resolved link to it
+    yet. The note itself is excluded. SQL narrows candidates with a substring
+    prefilter on lower(body); exact matching runs in Python. Ordered by title,
+    capped at `limit` (≤ UNLINKED_MENTIONS_MAX). Each row: id, title, slug,
+    term (the title/alias matched), match (text as written), snippet (~120
+    chars around the first mention) and updated_at."""
+    limit = max(1, min(int(limit), UNLINKED_MENTIONS_MAX))
+    pool = await get_pool()
+    target = await pool.fetchrow(
+        "SELECT id, project_id, title, metadata FROM notes "
+        "WHERE id = $1::uuid AND archived_at IS NULL",
+        note_id,
+    )
+    if target is None:
+        return []
+    md = target["metadata"]
+    metadata = json.loads(md) if isinstance(md, str) else (md or {})
+    matcher = MentionMatcher(mention_terms(target["title"], metadata))
+    if not matcher.terms:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT n.id, n.title, n.slug, n.body, n.updated_at
+        FROM notes n
+        WHERE n.project_id = $2::uuid
+          AND n.archived_at IS NULL
+          AND n.id <> $1::uuid
+          AND NOT EXISTS (
+              SELECT 1 FROM note_links l
+              WHERE l.source_note_id = n.id AND l.target_note_id = $1::uuid
+          )
+          AND EXISTS (
+              SELECT 1 FROM unnest($3::text[]) AS t(needle)
+              WHERE strpos(lower(n.body), t.needle) > 0
+          )
+        ORDER BY lower(n.title), n.id
+        """,
+        note_id, str(target["project_id"]), matcher.prefilter_needles(),
+    )
+    out: list[dict] = []
+    for r in rows:
+        m = matcher.first(r["body"])
+        if m is None:
+            continue
+        out.append({
+            "id": str(r["id"]),
+            "title": r["title"],
+            "slug": r["slug"],
+            "term": m.term,
+            "match": m.text,
+            "snippet": mention_snippet(r["body"], m.start, m.end),
+            "updated_at": r["updated_at"].isoformat(),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def link_unlinked_mention(target_id: str, source_id: str, user_id: str) -> Note:
+    """Turn the FIRST plain mention of the target note in the source note into
+    a wikilink (`[[Title]]`, or `[[Title|as written]]` when the text differs
+    from the title), saved through update_note like any edit — revision
+    snapshot, link re-sync, embedding enqueue and `updated_via` attribution
+    included. The source's version is pinned, so a concurrent save raises
+    StaleUpdate rather than being overwritten. Permission checks are the
+    caller's (editor+ on the source). Raises MentionLinkError otherwise."""
+    target = await get_note(target_id)
+    source = await get_note(source_id)
+    if (target is None or source is None or source.id == target.id
+            or source.project_id != target.project_id):
+        raise MentionLinkError("not_found")
+    terms = mention_terms(target.title, target.metadata)
+    if not terms:
+        raise MentionLinkError("unlinkable_title")
+    pool = await get_pool()
+    if await pool.fetchval(
+        "SELECT 1 FROM note_links WHERE source_note_id = $1::uuid "
+        "AND target_note_id = $2::uuid",
+        source.id, target.id,
+    ):
+        raise MentionLinkError("already_linked")
+    m = MentionMatcher(terms).first(source.body)
+    if m is None:
+        raise MentionLinkError("no_mention")
+    link = mention_link_text(target.title, m, source.body)
+    new_body = source.body[: m.start] + link + source.body[m.end :]
+    updated = await update_note(
+        source.id, None, new_body, user_id, base_updated_at=source.updated_at
+    )
+    if updated is None:  # purged between the read and the write
+        raise MentionLinkError("not_found")
+    return updated
 
 # ── Version history (snapshots) ─────────────────────────────
 # Full-body snapshots (not deltas); diffs are computed on view in the browser.

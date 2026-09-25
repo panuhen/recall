@@ -1,4 +1,5 @@
-"""Retrieval tools: hybrid search, structured query, semantic link candidates."""
+"""Retrieval tools: hybrid search, structured query, semantic link candidates,
+unlinked mentions."""
 from __future__ import annotations
 
 from fastmcp import FastMCP
@@ -6,7 +7,7 @@ from fastmcp import FastMCP
 from .. import data
 from ..embeddings_provider import embed_query
 from ..links import with_note_urls
-from ._base import NOT_FOUND, UNAUTH, note_and_role, resolve_user
+from ._base import NOT_FOUND, UNAUTH, WRITE_ROLES, note_and_role, resolve_user
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
 
@@ -87,3 +88,34 @@ def register(mcp: FastMCP) -> None:
             return NOT_FOUND
         limit = max(1, min(int(limit or 8), 25))
         return {"candidates": with_note_urls(await data.suggest_links(note_id, limit))}
+
+    @mcp.tool(title="Find unlinked mentions of a note", annotations=_READ)
+    async def unlinked_mentions(note_id: str, limit: int = 20) -> dict:
+        """Notes in the same workspace that mention this note's title (or one of
+        its frontmatter `aliases`) in plain text but don't link to it yet — the
+        "someone wrote its name but forgot the [[wikilink]]" list.
+
+        Matching is case-insensitive on whole words/phrases ("worker" doesn't
+        match "coworkers"), with no stemming. Mentions inside code, existing
+        wikilinks, markdown links/URLs and frontmatter don't count; terms under
+        3 characters and generic one-word titles (note, todo, draft, …) are
+        skipped. Trashed notes and notes already linking here are excluded.
+
+        Each mention: `id`/`title`/`url` of the mentioning note, `term` (the
+        title or alias matched), `match` (the text as written), and `snippet`
+        (context around the first mention). `can_edit` says whether you may
+        convert them with `link_mention`.
+
+        Args:
+            note_id: The note being mentioned.
+            limit: Max mentioning notes, 1–50 (default 20).
+        """
+        user = await resolve_user()
+        if user is None:
+            return UNAUTH
+        note, role = await note_and_role(user, note_id)
+        if note is None or role is None:
+            return NOT_FOUND
+        limit = max(1, min(int(limit or 20), 50))
+        mentions = with_note_urls(await data.get_unlinked_mentions(note.id, limit))
+        return {"mentions": mentions, "can_edit": role in WRITE_ROLES}

@@ -1038,6 +1038,59 @@ async def api_related_notes(request: Request) -> JSONResponse:
     return JSONResponse({"related": await data.suggest_links(note.id, 5)})
 
 
+@mcp.custom_route("/api/notes/{note_id}/unlinked-mentions", methods=["GET"])
+async def api_unlinked_mentions(request: Request) -> JSONResponse:
+    """Notes in this workspace that mention this note's title/aliases in plain
+    text without linking it — the web UI's 'Unlinked mentions' section under
+    Backlinks. Read access suffices; `can_edit` per row says whether the caller
+    may link that source (editor+ on it)."""
+    ctx = await _note_for(request)
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    _user, note, role = ctx
+    # Sources share the target's workspace, so the caller's role is the same.
+    can_edit = role in ("owner", "editor")
+    mentions = await data.get_unlinked_mentions(note.id)
+    return JSONResponse({"mentions": [{**m, "can_edit": can_edit} for m in mentions]})
+
+
+@mcp.custom_route("/api/notes/{note_id}/unlinked-mentions/link", methods=["POST"])
+async def api_link_unlinked_mention(request: Request) -> JSONResponse:
+    """Link the first plain mention of this note inside `source_note_id`
+    (rewrites that text into a `[[wikilink]]`). Needs read access to this note
+    and editor+ on the source. Returns the updated source note; 409 with an
+    `error` code when there's nothing to link or the source moved meanwhile."""
+    ctx = await _note_for(request)
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    user, note, _role = ctx
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    source_id = payload.get("source_note_id") if isinstance(payload, dict) else None
+    if not isinstance(source_id, str) or not source_id:
+        return JSONResponse({"error": "source_note_id required"}, status_code=400)
+    try:
+        source = await data.get_note(source_id)
+    except (ValueError, asyncpg.DataError):  # not a uuid
+        source = None
+    if source is None or (
+        src_role := await data.get_membership_role(user.id, source.project_id)
+    ) is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if src_role not in ("owner", "editor"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        updated = await data.link_unlinked_mention(note.id, source.id, user.id)
+    except data.MentionLinkError as e:
+        status = 404 if e.code == "not_found" else 409
+        return JSONResponse({"error": e.code}, status_code=status)
+    except data.StaleUpdate:
+        return JSONResponse({"error": "conflict"}, status_code=409)
+    return JSONResponse(_note_json(updated))
+
+
 @mcp.custom_route("/api/notes/{note_id}/revisions", methods=["GET"])
 async def api_list_revisions(request: Request) -> JSONResponse:
     ctx = await _note_for(request)

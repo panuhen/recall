@@ -235,7 +235,10 @@ function PreferencesSection() {
           ]}
         />
       </Row>
-      <Row label="Backlinks" hint="Other notes that link to this one, listed below it.">
+      <Row
+        label="Backlinks"
+        hint="Other notes that link to this one, listed below it, plus notes that mention it without a link."
+      >
         <BoolSegmented
           value={prefs.backlinks}
           onChange={(v) => setPref("backlinks", v)}

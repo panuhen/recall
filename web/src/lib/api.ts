@@ -129,6 +129,21 @@ export type Note = NoteSummary & {
 // cosine similarity (0–1), used for ordering only.
 export type RelatedNote = { id: string; title: string; slug: string; score: number };
 
+// A note that names this one in plain text (title or a frontmatter alias)
+// without linking it. `term` is the title/alias matched, `match` the text as
+// written, `snippet` ~120 chars of context. `can_edit` = the caller may turn
+// the mention into a [[wikilink]] (editor+ on the mentioning note).
+export type UnlinkedMention = {
+  id: string;
+  title: string;
+  slug: string;
+  term: string;
+  match: string;
+  snippet: string;
+  updated_at: string;
+  can_edit: boolean;
+};
+
 // A point-in-time snapshot of a note's body. `trigger` records why it was
 // taken; `label` is set only for manual "Save version" snapshots. The list
 // endpoint omits `body` (kept light); fetch a single revision to get it.
@@ -288,6 +303,21 @@ export const getRelated = (noteId: string) =>
   fetch(`/api/notes/${noteId}/related`, { cache: "no-store" }).then((r) =>
     json<{ related: RelatedNote[] }>(r),
   );
+
+// Notes mentioning this one in plain text but not linking it (same workspace).
+export const getUnlinkedMentions = (noteId: string) =>
+  fetch(`/api/notes/${noteId}/unlinked-mentions`, { cache: "no-store" }).then((r) =>
+    json<{ mentions: UnlinkedMention[] }>(r),
+  );
+
+// Rewrite the first plain mention of `noteId` inside `sourceNoteId` into a
+// [[wikilink]]. Returns the updated source note.
+export const linkUnlinkedMention = (noteId: string, sourceNoteId: string) =>
+  fetch(`/api/notes/${noteId}/unlinked-mentions/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source_note_id: sourceNoteId }),
+  }).then((r) => json<Note>(r));
 
 // ── Version history ─────────────────────────────────────────
 

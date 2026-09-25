@@ -25,6 +25,7 @@ import type { EditorMode } from "@/components/editor/markdown-editor";
 import { NoteHistoryPanel } from "@/components/editor/note-history-panel";
 import { NoteTitleInput } from "@/components/editor/note-title-input";
 import { ReadingView } from "@/components/editor/reading-view";
+import { UnlinkedMentions } from "@/components/editor/unlinked-mentions";
 import { NoteMenu } from "@/components/note-menu";
 import { NoteProperties } from "@/components/note-properties";
 import { useTabs } from "@/components/tabs/tabs-context";
@@ -309,6 +310,17 @@ export default function NotePage({
       cancelled = true;
     };
   }, [noteId, showBacklinks, relatedEnabled, noteUpdatedAt]);
+
+  // After "Link" in Unlinked mentions edits another note, pull the fresh
+  // backlinks list. Only backlinks are merged: the open note's own body/title
+  // (and any unsaved edits in the editor) are untouched.
+  const refreshBacklinks = useCallback(() => {
+    getNote(noteId)
+      .then((fresh) =>
+        setNote((n) => (n && n.id === fresh.id ? { ...n, backlinks: fresh.backlinks } : n)),
+      )
+      .catch(() => {});
+  }, [noteId]);
 
   // Keep this note's tab label in sync with its (possibly edited) title.
   useEffect(() => {
@@ -793,6 +805,14 @@ export default function NotePage({
                         </ul>
                       )}
                     </div>
+                  )}
+                  {showBacklinks && noteUpdatedAt && (
+                    <UnlinkedMentions
+                      key={note.id}
+                      noteId={note.id}
+                      version={noteUpdatedAt}
+                      onLinked={refreshBacklinks}
+                    />
                   )}
                   {/* Semantic neighbors — similar notes in this workspace the
                       note doesn't link to yet. Hidden entirely when empty (a

@@ -6,6 +6,7 @@ functions derive the queryable projection and links from it.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import yaml
@@ -203,3 +204,174 @@ def slugify(title: str) -> str:
     s = re.sub(r"[^\w\s-]", "", title.strip().lower())
     s = re.sub(r"[\s_-]+", "-", s).strip("-")
     return s or "untitled"
+
+
+# ── Unlinked mentions ───────────────────────────────────────
+# Plain-text occurrences of a note's title (or a frontmatter alias) in another
+# note's prose, for the "Unlinked mentions" surface and its one-click linker.
+# Pure string ops; the SQL prefilter and the edit live in data.py.
+
+# Single-word titles too generic to be worth surfacing as mentions. Matched
+# case-insensitively against whole terms only (a phrase like "Meeting notes"
+# is kept). Keep it short: every entry hides real mentions of such a note.
+MENTION_STOPWORDS = frozenset(
+    {"note", "notes", "test", "todo", "untitled", "draft", "idea", "misc"}
+)
+MENTION_MIN_LEN = 3
+
+# Regions of a (non-fenced) segment where a mention is not plain prose. Inline
+# code comes first so a `[[link]]` inside backticks stays code, as in
+# _CODE_OR_WIKILINK_RE. MULTILINE is for the reference-definition line anchor.
+_MENTION_MASK_RE = re.compile(
+    r"(`+).+?\1"                           # inline code span
+    r"|\[\[[^\]]+\]\]"                     # existing [[wikilink]]
+    r"|!?\[[^\]\n]*\]\([^)\n]*\)"          # [text](url) / ![alt](src)
+    r"|!?\[[^\]\n]*\]\[[^\]\n]*\]"         # [text][ref]
+    r"|^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*$"    # [ref]: url  (reference definition)
+    r"|<[A-Za-z/][^>\n]*>"                 # <https://autolink> / <html tag>
+    r"|(?:https?|ftp)://[^\s<>()\[\]]+",   # bare URL
+    re.MULTILINE,
+)
+
+
+def mention_terms(title: str, metadata: dict | None) -> list[str]:
+    """The phrases that count as a mention of a note: its title plus any
+    frontmatter `aliases:` (a list of strings or a single string). Whitespace
+    is collapsed; terms shorter than MENTION_MIN_LEN, without any word
+    character, single words in MENTION_STOPWORDS, or containing characters
+    that can't sit inside `[[...]]` are dropped. Case-insensitively unique,
+    title first. Returns [] when the title itself can't be written as a
+    wikilink target (no link could be made)."""
+    title = title or ""
+    if not title.strip() or set(title) & UNSAFE_WIKILINK_TITLE_CHARS:
+        return []
+    raw = [title]
+    aliases = (metadata or {}).get("aliases")
+    if isinstance(aliases, str):
+        raw.append(aliases)
+    elif isinstance(aliases, list):
+        raw.extend(a for a in aliases if isinstance(a, str))
+    out: dict[str, str] = {}
+    for t in raw:
+        t = " ".join(t.split())
+        if len(t) < MENTION_MIN_LEN or not re.search(r"\w", t):
+            continue
+        if set(t) & UNSAFE_WIKILINK_TITLE_CHARS:
+            continue
+        if " " not in t and t.lower() in MENTION_STOPWORDS:
+            continue
+        out.setdefault(t.lower(), t)
+    return list(out.values())
+
+
+def mention_masked_spans(body: str) -> list[tuple[int, int]]:
+    """Sorted `(start, end)` offsets of `body` that are NOT plain prose for
+    mention purposes: the frontmatter block, fenced code blocks (incl. their
+    delimiter lines), inline code, existing wikilinks, markdown link text and
+    URLs, reference definitions, autolinks/HTML tags and bare URLs."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    fm = _FRONTMATTER_RE.match(body)
+    if fm:
+        spans.append((0, fm.end()))
+        start = fm.end()
+    pos = start
+    for text, in_fence in _iter_code_fence_segments(body[start:]):
+        end = pos + len(text)
+        if in_fence:
+            spans.append((pos, end))
+        else:
+            spans.extend(m.span() for m in _MENTION_MASK_RE.finditer(body, pos, end))
+        pos = end
+    return spans
+
+
+@dataclass(frozen=True)
+class Mention:
+    start: int
+    end: int
+    text: str  # the matched text as written in the body
+    term: str  # the title/alias it matched
+
+
+class MentionMatcher:
+    """Finds whole-word, case-insensitive occurrences of any term in prose.
+
+    Word boundaries are explicit Unicode lookarounds (`(?<!\\w)` / `(?!\\w)`,
+    `str` patterns are Unicode by default), so "worker" never matches inside
+    "coworker" or "workers" and Finnish/accented letters count as letters.
+    Words in a multi-word term may be separated by any run of spaces/tabs (not
+    newlines). Longer terms are tried first so the longest phrase wins at a
+    position. No stemming."""
+
+    def __init__(self, terms: list[str]):
+        self.terms = list(terms)
+        self._by_key = {" ".join(t.lower().split()): t for t in self.terms}
+        ordered = sorted(self.terms, key=len, reverse=True)
+        alts = [r"[^\S\n]+".join(re.escape(w) for w in t.split()) for t in ordered]
+        self._re = (
+            re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)", re.IGNORECASE)
+            if alts else None
+        )
+
+    def prefilter_needles(self) -> list[str]:
+        """One lowercase substring per term that every match must contain (its
+        longest word) — for a cheap `strpos(lower(body), …)` SQL prefilter."""
+        return sorted({max(t.lower().split(), key=len) for t in self.terms})
+
+    def first(self, body: str) -> Mention | None:
+        """The first mention of any term in `body` outside the masked regions
+        (see mention_masked_spans), or None."""
+        if self._re is None:
+            return None
+        spans = mention_masked_spans(body)
+        pos = 0
+        while pos <= len(body):
+            m = self._re.search(body, pos)
+            if m is None:
+                return None
+            s, e = m.span()
+            hit = next((sp for sp in spans if sp[0] < e and s < sp[1]), None)
+            if hit is None:
+                text = m.group(0)
+                term = self._by_key.get(" ".join(text.lower().split()), text)
+                return Mention(s, e, text, term)
+            # Inside a masked region: resume after it. Straddling its start:
+            # retry one character on (a shorter term may still fit before it).
+            pos = hit[1] if s >= hit[0] else s + 1
+        return None
+
+
+def mention_snippet(body: str, start: int, end: int, width: int = 120) -> str:
+    """~`width` characters of context around `body[start:end]`, kept within
+    the enclosing paragraph (and after any frontmatter), snapped to word
+    boundaries and whitespace-collapsed. Ellipses mark trimmed ends."""
+    fm = _FRONTMATTER_RE.match(body)
+    floor = fm.end() if fm else 0
+    para_start = body.rfind("\n\n", floor, start)
+    lo = para_start + 2 if para_start != -1 else floor
+    para_end = body.find("\n\n", end)
+    hi = para_end if para_end != -1 else len(body)
+    side = max(0, (width - (end - start)) // 2)
+    a, b = max(lo, start - side), min(hi, end + side)
+    if a > lo:
+        sp = body.find(" ", a, start)
+        a = sp + 1 if sp != -1 else a
+    if b < hi:
+        sp = body.rfind(" ", end, b)
+        b = sp if sp != -1 else b
+    text = " ".join(body[a:b].split())
+    return ("…" if a > lo else "") + text + ("…" if b < hi else "")
+
+
+def mention_link_text(title: str, mention: Mention, body: str) -> str:
+    """The wikilink that replaces `mention`: `[[Title]]` when the matched text
+    is exactly the title, else `[[Title|matched text]]` so the prose reads the
+    same. Inside a GFM table row the `|` would split the cell, so there it's
+    always `[[Title]]`."""
+    if mention.text == title:
+        return f"[[{title}]]"
+    line_start = body.rfind("\n", 0, mention.start) + 1
+    if body[line_start:mention.start].lstrip().startswith("|"):
+        return f"[[{title}]]"
+    return f"[[{title}|{mention.text}]]"

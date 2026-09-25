@@ -1,4 +1,5 @@
-"""Note tools: read, create, update, link, save a version.
+"""Note tools: read, create, update, link (append or convert a mention), save a
+version.
 
 Writes require editor+ (the same gate as the REST routes). `create_note` and
 `update_note` return semantic link candidates so an assistant can immediately
@@ -10,7 +11,7 @@ from fastmcp import FastMCP
 
 from .. import data
 from ..embeddings_provider import build_embed_text, embed_query
-from ..links import with_note_urls
+from ..links import note_url, with_note_urls
 from ._base import (
     FORBIDDEN,
     NOT_FOUND,
@@ -177,6 +178,51 @@ def register(mcp: FastMCP) -> None:
         new_body = f"{note.body}{sep}[[{target}]]\n"
         updated = await data.update_note(note.id, None, new_body, user.id)
         return note_dict(updated)
+
+    # Not folded into `link_notes`: that tool APPENDS a link to any title
+    # (even a dangling one) at the end of the body, whereas this one rewrites
+    # an existing plain-text mention in place and needs the target's id to
+    # find it. One tool per behaviour keeps both descriptions unambiguous.
+    @mcp.tool(title="Link a plain-text mention", annotations=_WRITE)
+    async def link_mention(note_id: str, source_note_id: str) -> dict:
+        """Turn the first unlinked plain-text mention of note `note_id` inside
+        note `source_note_id` into a `[[wikilink]]` (editor+ on the source; the
+        target only needs read access). Find candidates with
+        `unlinked_mentions`.
+
+        The mention is rewritten in place: `[[Title]]` when it already reads
+        exactly like the title, else `[[Title|text as written]]` so the prose is
+        unchanged. Saved like any edit (version snapshot, link re-parse,
+        re-embed), so the source now shows up in the target's backlinks.
+        Returns the updated source note. Errors: `no_mention` (nothing left to
+        link), `already_linked`, `conflict` (the source changed meanwhile —
+        retry), `unlinkable_title`.
+
+        Args:
+            note_id: The note being mentioned (the link target).
+            source_note_id: The note containing the mention (gets edited).
+        """
+        user = await resolve_user()
+        if user is None:
+            return UNAUTH
+        target, role = await note_and_role(user, note_id)
+        if target is None or role is None:
+            return NOT_FOUND
+        source, src_role = await note_and_role(user, source_note_id)
+        if source is None or src_role is None:
+            return NOT_FOUND
+        if src_role not in WRITE_ROLES:
+            return FORBIDDEN
+        try:
+            updated = await data.link_unlinked_mention(target.id, source.id, user.id)
+        except data.MentionLinkError as e:
+            return {"error": e.code}
+        except data.StaleUpdate:
+            return {"error": "conflict"}
+        return note_dict(
+            updated, linked_to={"id": target.id, "title": target.title,
+                                "url": note_url(target.id)},
+        )
 
     @mcp.tool(title="Save a version", annotations=_WRITE)
     async def save_version(note_id: str, label: str | None = None) -> dict:
