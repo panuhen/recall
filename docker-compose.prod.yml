@@ -91,6 +91,13 @@ services:
     restart: unless-stopped
     environment: *backend-env
     command: ["sh", "worker.sh"]
+    # Checks the app config, the database connection and the job table.
+    healthcheck:
+      test: ["CMD", "procrastinate", "--app=src.tasks.procrastinate_app", "healthchecks"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       backend:
         condition: service_healthy
