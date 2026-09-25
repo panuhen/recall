@@ -1,0 +1,162 @@
+# Production stack for a single host (e.g. Coolify on Hetzner). The plain
+# docker-compose.yml is the local dev stack (bind mounts, reloaders, host
+# ports); this one builds the production images and binds nothing on the host:
+# the platform's reverse proxy routes the two public hosts to `web:3000` and
+# `backend:8765`.
+#
+# Every setting comes from the environment (Coolify: the resource's Environment
+# Variables). `:?` marks the ones that must be set; the rest have safe defaults.
+# See .env.example for what each one means.
+
+name: recall
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-recall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong database password}
+      POSTGRES_DB: ${POSTGRES_DB:-recall}
+    volumes:
+      - recall_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-recall} -d ${POSTGRES_DB:-recall}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # MCP server + REST API. Runs `alembic upgrade head` on start, so there is
+  # no separate migration step. Public host: MCP_PUBLIC_URL (port 8765).
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: &backend-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-recall}
+      PYTHONPATH: /app
+      AUTH_MODE: ${AUTH_MODE:-betterauth}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8765"
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?public MCP origin, e.g. https://recall-mcp.example.com}
+      # The public MCP host plus the in-network name the web BFF uses.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?e.g. recall-mcp.example.com,backend,backend:*}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      BETTER_AUTH_INTERNAL_URL: http://web:3000
+      # entra mode only.
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AZURE_API_AUDIENCE: ${AZURE_API_AUDIENCE:-}
+      MCP_SCOPES: ${MCP_SCOPES:-}
+      # Embeddings. azure (default): an Azure OpenAI embeddings deployment.
+      # openai: any OpenAI-compatible endpoint, e.g. api.openai.com, or the
+      # built-in ollama service below (see its comment for how to switch).
+      # Changing model or dim re-embeds every note on the next start.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-azure}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_EMBEDDING_ENDPOINT: ${AZURE_OPENAI_EMBEDDING_ENDPOINT:-}
+      AZURE_OPENAI_EMBEDDING_MODEL: ${AZURE_OPENAI_EMBEDDING_MODEL:-text-embedding-3-large}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-large}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      EMBEDDING_SEND_DIMENSIONS: ${EMBEDDING_SEND_DIMENSIONS:-auto}
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-0}
+      TRASH_PURGE_CRON: ${TRASH_PURGE_CRON:-0 4 * * *}
+    expose:
+      - "8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Background jobs (note embedding, trash purge). Same image and settings as
+  # the backend, no ingress.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    command: ["sh", "worker.sh"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Next.js BFF + Better Auth (sign-in, and the OAuth server MCP clients use).
+  # Public host: BETTER_AUTH_URL (port 3000).
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      AUTH_MODE: ${AUTH_MODE:-betterauth}
+      BACKEND_URL: http://backend:8765
+      # Better Auth owns its ba_* tables in the same database and creates them
+      # at startup.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-recall}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      # Empty default on purpose: the web app refuses to start on an https
+      # origin without a real secret.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_SIGNUP: ${BETTER_AUTH_SIGNUP:-closed}
+      BETTER_AUTH_ALLOWED_EMAILS: ${BETTER_AUTH_ALLOWED_EMAILS:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      APP_URL: ${BETTER_AUTH_URL:-}
+      # entra mode only.
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AUTH_REDIRECT_URI: ${AUTH_REDIRECT_URI:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/sign-in', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Built-in embedding model (optional, off by default). Reached only inside
+  # this network; pulls EMBEDDING_MODEL into its volume on first start. To use
+  # it instead of Azure/OpenAI, set:
+  #   COMPOSE_PROFILES=local-embeddings
+  #   EMBEDDING_PROVIDER=openai
+  #   EMBEDDING_BASE_URL=http://ollama:11434/v1
+  #   EMBEDDING_MODEL=bge-m3   EMBEDDING_DIM=1024   (multilingual, ~1.2 GB RAM)
+  ollama:
+    profiles: ["local-embeddings"]
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      # Keep the model loaded between notes instead of reloading it every 5 min.
+      OLLAMA_KEEP_ALIVE: 1h
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        ollama pull "$$OLLAMA_MODEL"
+        wait
+    volumes:
+      - recall_ollama:/root/.ollama
+    expose:
+      - "11434"
+
+volumes:
+  recall_pgdata:
+  recall_ollama:
