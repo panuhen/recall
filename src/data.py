@@ -4,23 +4,28 @@ Plain asyncpg queries + dataclasses. No ORM.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 
 from . import config
+from . import guide as guide_rules
 from .auth import mcp_client_name
 from .embeddings_provider import to_pgvector
 from .markdown import (
     UNSAFE_WIKILINK_TITLE_CHARS,
     MentionMatcher,
     extract_wikilinks,
+    frontmatter_problem,
     mention_link_text,
     mention_snippet,
     mention_terms,
     parse_frontmatter,
     project_metadata,
     rewrite_wikilink_target,
+    set_frontmatter_value,
     slugify,
 )
 from .state import get_pool
@@ -2478,3 +2483,269 @@ async def get_root_graph(user_id: str) -> dict:
             {"source": str(r["source"]), "target": str(r["target"]), "kind": "link"}
         )
     return {"nodes": nodes, "links": edges}
+
+
+# ── Workspace guide + health ────────────────────────────────
+# The guide is one note per workspace (`type: guide`) whose flat frontmatter
+# lists the workspace's types and tags (guide.py). A note's review cadence is
+# its own `review_every:`. Health is computed on read from what's stored; the
+# only write is mark_reviewed, which sets `reviewed:` in the frontmatter.
+
+HEALTH_STALE_MONTHS = 6
+HEALTH_LIST_MAX = 50
+
+# Broken YAML projects as "no frontmatter" (type NULL), which would make a guide
+# vanish the moment someone breaks it. So also look for a raw `type: guide`
+# line, and confirm in Python that it sits in a broken frontmatter block.
+_GUIDE_LINE_PG = "(^|\n)type:[ \t]*[\"']?guide[\"']?[ \t]*(\r?\n|$)"
+_GUIDE_LINE_RE = re.compile(_GUIDE_LINE_PG, re.IGNORECASE)
+
+
+class GuideExists(Exception):
+    def __init__(self, note_id: str):
+        super().__init__(note_id)
+        self.note_id = note_id
+
+
+class ReviewError(Exception):
+    """mark_reviewed refused: `code` is frontmatter_invalid (the note's YAML is
+    broken, so rewriting it could lose data)."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _is_broken_guide(body: str) -> bool:
+    if frontmatter_problem(body) is None:
+        return False
+    block = body.split("\n---", 1)[0]
+    return bool(_GUIDE_LINE_RE.search(block))
+
+
+def _guide_summary(body: str) -> str:
+    """First line of prose in the guide (skips headings), for the landing page."""
+    content = parse_frontmatter(body)[1]
+    for line in content.splitlines():
+        text = line.strip()
+        if text and not text.startswith(("#", "---", "```")):
+            return text if len(text) <= 240 else text[:237] + "…"
+    return ""
+
+
+async def _load_guide(project_id: str, conn=None):
+    """(guide info dict, Conventions or None). (None, None) when the workspace
+    has no guide. Conventions are None when the guide has any problem."""
+    pool = await get_pool()
+    rows = await (conn or pool).fetch(
+        "SELECT id, title, type, body, created_at, updated_at FROM notes "
+        "WHERE project_id = $1::uuid AND archived_at IS NULL "
+        "AND (type = 'guide' OR (type IS NULL AND body LIKE '---%' AND body ~* $2)) "
+        "ORDER BY created_at, id",
+        project_id, _GUIDE_LINE_PG,
+    )
+    guides = [r for r in rows if r["type"] == "guide" or _is_broken_guide(r["body"])]
+    if not guides:
+        return None, None
+    g = guides[0]
+    problem = frontmatter_problem(g["body"])
+    if problem:
+        conv, problems = guide_rules.Conventions(), [problem]
+    else:
+        conv, problems = guide_rules.parse_conventions(parse_frontmatter(g["body"])[0])
+    owner_left = False
+    if conv.owner:
+        members = await list_members(project_id)
+        owner_left = not guide_rules.owner_matches(conv.owner, members)
+    info = {
+        "id": str(g["id"]),
+        "title": g["title"],
+        "summary": _guide_summary(g["body"]),
+        "body": g["body"],
+        "owner": conv.owner,
+        "owner_left": owner_left,
+        "problems": problems,
+        "conventions": None if problems else conv.to_dict(),
+        "guide_count": len(guides),
+        "other_guide_ids": [str(r["id"]) for r in guides[1:]],
+        "updated_at": g["updated_at"].isoformat(),
+    }
+    return info, (None if problems else conv)
+
+
+async def get_guide(project_id: str) -> dict | None:
+    """The workspace's guide: body, parsed conventions, problems. The oldest
+    `type: guide` note wins when there are several (`guide_count` says so)."""
+    info, _ = await _load_guide(project_id)
+    return info
+
+
+async def note_health(note: "Note", today: date | None = None) -> dict:
+    """One note's `review` (from its own `review_every`/`reviewed`), `hints`
+    (a bad `review_every`, plus the guide's tag/type hints), the workspace's
+    `conventions` (for suggestions) and `guide_id`."""
+    created = datetime.fromisoformat(note.created_at).date()
+    review = guide_rules.review_state(note.metadata, created, today or _today())
+    hints = guide_rules.check_review_every(note.metadata)
+    info, conv = await _load_guide(note.project_id)
+    if info is None:
+        return {"review": review, "hints": hints, "conventions": None, "guide_id": None}
+    base = {"review": review, "conventions": info["conventions"], "guide_id": info["id"]}
+    if note.id == info["id"]:
+        return {**base, "hints": hints + [
+            {"code": "guide_problem", "field": None, "message": p} for p in info["problems"]
+        ]}
+    if note.id in info["other_guide_ids"]:
+        return {**base, "hints": hints + [{
+            "code": "extra_guide", "field": "type",
+            "message": f"This workspace already has a guide: “{info['title']}”. "
+                       "Only the oldest guide is used.",
+        }]}
+    if conv is not None:
+        hints += guide_rules.check_note(conv, note.type, note.tags)
+    return {**base, "hints": hints}
+
+
+def _months_ago(today: date, months: int) -> date:
+    y, m = divmod(today.month - 1 - months, 12)
+    y, m = today.year + y, m + 1
+    return date(y, m, min(today.day, calendar.monthrange(y, m)[1]))
+
+
+async def workspace_health(project_id: str, today: date | None = None) -> dict:
+    """Health lists for a workspace, computed from what's stored:
+
+    * overdue: past their own `review_every`
+    * not_edited: untouched (not edited or reviewed) for HEALTH_STALE_MONTHS,
+      excluding notes with a review interval (they're under `overdue`)
+    * old_drafts: `status: draft` and untouched as long
+    * orphans: no resolved link in or out
+    * broken_links: `[[links]]` to a missing or trashed note
+    * owner_left: `owner:` names nobody who is still a member
+
+    Each list is capped at HEALTH_LIST_MAX; `counts` has the full totals."""
+    today = today or _today()
+    stale_before = _months_ago(today, HEALTH_STALE_MONTHS)
+    info, _conv = await _load_guide(project_id)
+    guide_ids = {info["id"], *info["other_guide_ids"]} if info else set()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        notes = await conn.fetch(
+            "SELECT id, title, type, status, metadata, created_at, updated_at "
+            "FROM notes WHERE project_id = $1::uuid AND archived_at IS NULL",
+            project_id,
+        )
+        linked = await conn.fetch(
+            "SELECT l.source_note_id AS s, l.target_note_id AS t FROM note_links l "
+            "JOIN notes sn ON sn.id = l.source_note_id AND sn.archived_at IS NULL "
+            "JOIN notes tn ON tn.id = l.target_note_id AND tn.archived_at IS NULL "
+            "WHERE sn.project_id = $1::uuid",
+            project_id,
+        )
+        broken = await conn.fetch(
+            "SELECT sn.id, sn.title, l.target_title, (tn.id IS NOT NULL) AS trashed "
+            "FROM note_links l "
+            "JOIN notes sn ON sn.id = l.source_note_id AND sn.archived_at IS NULL "
+            "LEFT JOIN notes tn ON tn.id = l.target_note_id "
+            "WHERE sn.project_id = $1::uuid "
+            "AND (l.target_note_id IS NULL OR tn.archived_at IS NOT NULL) "
+            "ORDER BY sn.title, l.target_title",
+            project_id,
+        )
+    members = await list_members(project_id)
+    has_link = {str(r["s"]) for r in linked} | {str(r["t"]) for r in linked}
+
+    def row(r, **extra) -> dict:
+        return {"id": str(r["id"]), "title": r["title"], "type": r["type"],
+                "updated_at": r["updated_at"].isoformat(), **extra}
+
+    overdue, not_edited, old_drafts, orphans, owner_left = [], [], [], [], []
+    for r in notes:
+        nid = str(r["id"])
+        if nid in guide_ids:
+            continue
+        md = r["metadata"]
+        md = json.loads(md) if isinstance(md, str) else (md or {})
+        reviewed = guide_rules.as_date(md.get("reviewed"))
+        edited = r["updated_at"].date()
+        touched = max(edited, reviewed) if reviewed else edited
+        review = guide_rules.review_state(md, r["created_at"].date(), today)
+        if review and review["overdue"]:
+            overdue.append(row(r, reviewed=review["reviewed"], due=review["due"],
+                               every=review["every"], every_text=review["every_text"],
+                               owner=md.get("owner")))
+        if r["status"] == "draft" and touched < stale_before:
+            old_drafts.append(row(r))
+        elif review is None and touched < stale_before:
+            not_edited.append(row(r))
+        if nid not in has_link:
+            orphans.append(row(r))
+        owner = md.get("owner")
+        if isinstance(owner, str) and owner.strip() and not guide_rules.owner_matches(owner, members):
+            owner_left.append(row(r, owner=owner.strip()))
+
+    overdue.sort(key=lambda x: (x["due"], x["title"].lower()))
+    not_edited.sort(key=lambda x: x["updated_at"])
+    old_drafts.sort(key=lambda x: x["updated_at"])
+    orphans.sort(key=lambda x: x["title"].lower())
+    owner_left.sort(key=lambda x: x["title"].lower())
+    broken_links = [
+        {"id": str(r["id"]), "title": r["title"], "target_title": r["target_title"],
+         "reason": "trashed" if r["trashed"] else "missing"}
+        for r in broken
+    ]
+    lists = {
+        "overdue": overdue,
+        "not_edited": not_edited,
+        "old_drafts": old_drafts,
+        "orphans": orphans,
+        "broken_links": broken_links,
+        "owner_left": owner_left,
+    }
+    return {
+        "stale_after_months": HEALTH_STALE_MONTHS,
+        "counts": {k: len(v) for k, v in lists.items()},
+        **{k: v[:HEALTH_LIST_MAX] for k, v in lists.items()},
+    }
+
+
+async def mark_reviewed(note_id: str, user_id: str, today: date | None = None) -> "Note | None":
+    """Set `reviewed:` to today in the note's frontmatter, changing nothing
+    else. Saved as a normal edit, so the note records who reviewed it and when.
+    Raises StaleUpdate if the note changes underneath, ReviewError when its
+    frontmatter is broken."""
+    note = await get_note(note_id)
+    if note is None:
+        return None
+    new_body = set_frontmatter_value(note.body, "reviewed", (today or _today()).isoformat())
+    if new_body is None:
+        raise ReviewError("frontmatter_invalid")
+    return await update_note(note.id, None, new_body, user_id,
+                             base_updated_at=note.updated_at)
+
+
+async def create_starter_guide(project_id: str, user: "User") -> "Note":
+    """Create the workspace's guide from what it already uses: its note types
+    and most-used tags (as `workspace_types`/`workspace_tags`). Raises
+    GuideExists when it already has one."""
+    info, _ = await _load_guide(project_id)
+    if info is not None:
+        raise GuideExists(info["id"])
+    pool = await get_pool()
+    name = await pool.fetchval("SELECT name FROM projects WHERE id = $1::uuid", project_id)
+    type_rows = await pool.fetch(
+        "SELECT type, COUNT(*) AS n FROM notes "
+        "WHERE project_id = $1::uuid AND archived_at IS NULL "
+        "AND type IS NOT NULL AND type <> 'guide' "
+        "GROUP BY type ORDER BY n DESC, type LIMIT 10",
+        project_id,
+    )
+    tags = [t["tag"] for t in (await list_tags(project_id))[:8]]
+    body = guide_rules.starter_guide_body(
+        user.upn, [r["type"] for r in type_rows], tags
+    )
+    return await create_note(project_id, f"{name or 'Workspace'} guide", body, user.id)

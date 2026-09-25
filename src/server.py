@@ -83,6 +83,13 @@ INSTRUCTIONS = (
     "Notes and workspaces carry a `url`: a web link to share with people (null "
     "when the server has no APP_URL). A link grants no access; the reader needs "
     "access to the workspace. "
+    "A workspace can have a guide note (`type: guide`): its purpose, how to "
+    "write there, and the note types and tags it uses (`workspace_types`, "
+    "`workspace_tags`). `list_tree` returns it; read it before writing into a "
+    "workspace and follow it. Write results may carry `convention_hints` where "
+    "a note departs from the guide. A note can set `owner:` (a workspace "
+    "member's email, see `list_members`) and `review_every:` (e.g. 6mo); "
+    "`stale_notes` lists those due for review. "
     "You act as the signed-in user and see only workspaces they can access; "
     "writes require editor or owner."
 )
@@ -631,6 +638,47 @@ async def api_list_tree(request: Request) -> JSONResponse:
     )
 
 
+@mcp.custom_route("/api/projects/{project_id}/health", methods=["GET"])
+async def api_project_health(request: Request) -> JSONResponse:
+    """The workspace landing page's guide card + Health section: the guide
+    (summary, problems, conventions; no body) and the health lists."""
+    user = await _current_user(request)
+    if user is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    project_id = request.path_params["project_id"]
+    role = await data.get_membership_role(user.id, project_id)
+    if role is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    guide = await data.get_guide(project_id)
+    if guide is not None:
+        guide = {k: v for k, v in guide.items() if k != "body"}
+    return JSONResponse({
+        "guide": guide,
+        "health": await data.workspace_health(project_id),
+        "can_edit": role in ("owner", "editor"),
+    })
+
+
+@mcp.custom_route("/api/projects/{project_id}/guide", methods=["POST"])
+async def api_create_guide(request: Request) -> JSONResponse:
+    """Create the workspace's guide note, pre-filled from the types and tags
+    already in use (editor+). 409 with the existing guide's id if there is one."""
+    user = await _current_user(request)
+    if user is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    project_id = request.path_params["project_id"]
+    role = await data.get_membership_role(user.id, project_id)
+    if role is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if role not in ("owner", "editor"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        note = await data.create_starter_guide(project_id, user)
+    except data.GuideExists as e:
+        return JSONResponse({"error": "guide_exists", "note_id": e.note_id}, status_code=409)
+    return JSONResponse(_note_json(note), status_code=201)
+
+
 @mcp.custom_route("/api/projects/{project_id}/graph", methods=["GET"])
 async def api_project_graph(request: Request) -> JSONResponse:
     """Nodes + links for a project's knowledge graph. Any member may read."""
@@ -805,6 +853,7 @@ async def api_get_note(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             **_note_json(note),
+            **await data.note_health(note),
             "backlinks": backlinks,
             "links": links,
             "can_edit": role in ("owner", "editor"),
@@ -839,7 +888,8 @@ async def api_update_note(request: Request) -> JSONResponse:
             {"error": "conflict", "note": _note_json(current) if current else None},
             status_code=409,
         )
-    return JSONResponse(_note_json(updated))
+    # Hints/review refresh with every save, so a fixed tag clears its hint.
+    return JSONResponse({**_note_json(updated), **await data.note_health(updated)})
 
 
 @mcp.custom_route("/api/notes/{note_id}/move", methods=["POST"])
@@ -1089,6 +1139,28 @@ async def api_link_unlinked_mention(request: Request) -> JSONResponse:
     except data.StaleUpdate:
         return JSONResponse({"error": "conflict"}, status_code=409)
     return JSONResponse(_note_json(updated))
+
+
+@mcp.custom_route("/api/notes/{note_id}/reviewed", methods=["POST"])
+async def api_mark_reviewed(request: Request) -> JSONResponse:
+    """"Mark as reviewed": set `reviewed:` to today (editor+). Returns the
+    updated note with its review state. 409 `conflict` when the note changed
+    meanwhile, 409 `frontmatter_invalid` when its YAML is broken."""
+    ctx = await _note_for(request)
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    user, note, role = ctx
+    if role not in ("owner", "editor"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        updated = await data.mark_reviewed(note.id, user.id)
+    except data.StaleUpdate:
+        return JSONResponse({"error": "conflict"}, status_code=409)
+    except data.ReviewError as e:
+        return JSONResponse({"error": e.code}, status_code=409)
+    if updated is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({**_note_json(updated), **await data.note_health(updated)})
 
 
 @mcp.custom_route("/api/notes/{note_id}/revisions", methods=["GET"])

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { use, useCallback, useEffect, useState } from "react";
 
 import { useShare } from "@/components/share/share-dialog";
+import { GuideAndHealth } from "@/components/workspace/guide-and-health";
 import { Button } from "@/components/ui/button";
 import {
   createNote,
@@ -219,6 +220,8 @@ export default function WorkspacePage({
         {createErr && (
           <div className="mb-3 text-sm text-destructive">Couldn’t create a note.</div>
         )}
+
+        <GuideAndHealth projectId={projectId} />
 
         {groups.length === 0 ? (
           <div className="text-sm text-muted-foreground">No notes yet.</div>

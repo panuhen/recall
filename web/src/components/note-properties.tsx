@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Braces,
   Calendar,
   CalendarClock,
   Hash,
@@ -10,19 +11,26 @@ import {
   Tags,
   Type,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import type { Note } from "@/lib/api";
+import { listMembers, type GuideConventions, type Member, type Note } from "@/lib/api";
 import type { FrontmatterValue } from "@/lib/frontmatter";
+import { ownerStatus, reviewConfirmation } from "@/lib/health";
+import { cn } from "@/lib/utils";
 
 // Obsidian-style Properties editor. Properties are the note's YAML frontmatter;
 // each row has an editable key and a type-aware value editor. The backend
 // already parsed the YAML, so values arrive typed (via note.type/status/tags +
 // note.metadata) and we infer each property's kind from its value. Edits write
 // back through `onChange` (one key at a time) → the note body → autosave.
+// When the workspace has a guide, its declared types, statuses and tags are
+// offered as suggestions (never enforced).
 
-type Kind = "text" | "list" | "tags" | "number" | "checkbox" | "date" | "datetime";
-type PropValue = string | string[] | number | boolean;
+// "object" = a nested YAML value (a mapping, or a list of mappings) such as a
+// guide's `types:` block. Shown read-only: this editor writes flat
+// `key: value` lines, so editing it here would flatten it. Raw text edits it.
+type Kind = "text" | "list" | "tags" | "number" | "checkbox" | "date" | "datetime" | "object";
+type PropValue = string | string[] | number | boolean | Record<string, unknown> | unknown[];
 type Prop = { id: string; key: string; value: PropValue; kind: Kind };
 
 const TYPE_OPTIONS: { kind: Kind; label: string }[] = [
@@ -35,17 +43,41 @@ const TYPE_OPTIONS: { kind: Kind; label: string }[] = [
   { kind: "tags", label: "Tags" },
 ];
 
-// Names offered as quick-adds in the "Add property" menu.
+// Names offered as quick-adds in the "Add property" menu. `owner` and
+// `review_every` feed the workspace page's Health section.
 const SUGGESTED: { key: string; kind: Kind }[] = [
   { key: "type", kind: "text" },
   { key: "status", kind: "text" },
   { key: "tags", kind: "tags" },
+  { key: "owner", kind: "text" },
+  { key: "review_every", kind: "text" },
+];
+
+// A value suggestion; `label` explains it in the dropdown.
+type Option = { value: string; label?: string };
+
+// Periods offered for `review_every`, one per unit so the list also shows the
+// format. The backend reads other forms too ("6 months", "quarterly", "6M")
+// and never rewrites what was typed.
+const REVIEW_PERIODS: Option[] = [
+  { value: "2w", label: "every 2 weeks" },
+  { value: "30d", label: "every 30 days" },
+  { value: "1mo", label: "every month" },
+  { value: "3mo", label: "every 3 months" },
+  { value: "6mo", label: "every 6 months" },
+  { value: "1y", label: "every year" },
 ];
 
 let _uid = 0;
 const nextId = () => `p${++_uid}`;
 
+function isNested(v: unknown): boolean {
+  if (Array.isArray(v)) return v.some((x) => x !== null && typeof x === "object");
+  return v !== null && typeof v === "object";
+}
+
 function inferKind(key: string, v: unknown): Kind {
+  if (isNested(v)) return "object";
   if (key === "tags") return "tags";
   if (Array.isArray(v)) return "list";
   if (typeof v === "number") return "number";
@@ -91,28 +123,71 @@ function emptyFor(kind: Kind): PropValue {
   return "";
 }
 
+// Value suggestions for a property: the guide's types and tags, common review
+// periods, and workspace members for `owner`. Suggestions only; any value can
+// be typed.
+function optionsFor(prop: Prop, conv: GuideConventions | null, members: Member[]): Option[] {
+  if (prop.key === "review_every") return REVIEW_PERIODS;
+  // Only the email is written; the name is the dropdown label.
+  if (prop.key === "owner")
+    return members.map((m) => ({ value: m.upn, label: m.display_name ?? undefined }));
+  if (!conv) return [];
+  if (prop.key === "type") return conv.types.map((value) => ({ value }));
+  if (prop.kind === "tags") return conv.tags.map((value) => ({ value }));
+  return [];
+}
+
 export function NoteProperties({
   note,
   onChange,
   readOnly = false,
+  conventions = null,
 }: {
   note: Note;
   onChange: (updates: Record<string, FrontmatterValue>) => void;
   readOnly?: boolean;
+  conventions?: GuideConventions | null;
 }) {
   // Local, authoritative list (the parent keys this by note.id, so it
   // re-initialises per note and survives autosave refreshes of the same note).
   const [props, setProps] = useState<Prop[]>(() => initProps(note));
 
+  // Members, for `owner` suggestions and the "· member" check. Fetched only
+  // once the note has an owner property.
+  const hasOwner = !readOnly && props.some((p) => p.key === "owner");
+  const [members, setMembers] = useState<Member[]>([]);
+  useEffect(() => {
+    if (!hasOwner) return;
+    let cancelled = false;
+    listMembers(note.project_id)
+      .then((r) => !cancelled && setMembers(r.members))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hasOwner, note.project_id]);
+
+  // The muted line under a value: how `review_every` was read (server-side,
+  // refreshed on save) or who `owner` is (live, from the member list).
+  const lineFor = (p: Prop): { text: string; warn: boolean } | null => {
+    if (p.key === "review_every") {
+      const text = reviewConfirmation(note.review);
+      return text ? { text, warn: false } : null;
+    }
+    if (p.key === "owner" && typeof p.value === "string" && members.length > 0)
+      return ownerStatus(p.value, members);
+    return null;
+  };
+
   const setValue = (i: number, value: PropValue) => {
     setProps((prev) => prev.map((p, j) => (j === i ? { ...p, value } : p)));
-    if (props[i].key) onChange({ [props[i].key]: value });
+    if (props[i].key) onChange({ [props[i].key]: value as FrontmatterValue });
   };
 
   const setKind = (i: number, kind: Kind) => {
     const value = convert(props[i].value, kind);
     setProps((prev) => prev.map((p, j) => (j === i ? { ...p, kind, value } : p)));
-    if (props[i].key) onChange({ [props[i].key]: value });
+    if (props[i].key) onChange({ [props[i].key]: value as FrontmatterValue });
   };
 
   const remove = (i: number) => {
@@ -175,6 +250,8 @@ export function NoteProperties({
           onValue={(v) => setValue(i, v)}
           onKind={(k) => setKind(i, k)}
           onRemove={() => remove(i)}
+          options={optionsFor(p, conventions, members)}
+          line={lineFor(p)}
         />
       ))}
       <AddProperty existing={props.map((p) => p.key)} onAdd={add} />
@@ -184,8 +261,9 @@ export function NoteProperties({
 
 // Static value display for the read-only (viewer) Properties list.
 function ReadOnlyValue({ prop }: { prop: Prop }) {
+  if (prop.kind === "object") return <NestedValue value={prop.value} />;
   if (prop.kind === "tags" || prop.kind === "list") {
-    const items = Array.isArray(prop.value) ? prop.value : [];
+    const items = Array.isArray(prop.value) ? (prop.value as string[]) : [];
     if (items.length === 0) return <span className="text-muted-foreground">Empty</span>;
     return (
       <div className="flex flex-wrap gap-1">
@@ -202,18 +280,35 @@ function ReadOnlyValue({ prop }: { prop: Prop }) {
   return text ? <span>{text}</span> : <span className="text-muted-foreground">Empty</span>;
 }
 
+// A nested value summarised: a mapping's keys, or a list's length.
+function NestedValue({ value }: { value: PropValue }) {
+  const text = Array.isArray(value)
+    ? `${value.length} ${value.length === 1 ? "item" : "items"}`
+    : Object.keys(value as Record<string, unknown>).join(", ") || "Empty";
+  return (
+    <span className="text-muted-foreground" title="Nested value: edit it in Raw text">
+      {text}
+    </span>
+  );
+}
+
 function PropertyRow({
   prop,
   onKey,
   onValue,
   onKind,
   onRemove,
+  options,
+  line,
 }: {
   prop: Prop;
   onKey: (k: string) => boolean;
   onValue: (v: PropValue) => void;
   onKind: (k: Kind) => void;
   onRemove: () => void;
+  options: Option[];
+  // A muted line under the value (e.g. how review_every was understood).
+  line?: { text: string; warn: boolean } | null;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [keyDraft, setKeyDraft] = useState(prop.key);
@@ -230,6 +325,7 @@ function PropertyRow({
         <KindIcon kind={prop.kind} />
         <input
           value={keyDraft}
+          readOnly={prop.kind === "object"}
           autoFocus={prop.key === ""}
           placeholder="key"
           onChange={(e) => setKeyDraft(e.target.value)}
@@ -243,7 +339,22 @@ function PropertyRow({
         />
       </div>
       <div className="min-w-0 flex-1">
-        <ValueEditor key={prop.kind} prop={prop} onValue={onValue} />
+        <ValueEditor
+          key={prop.kind}
+          prop={prop}
+          onValue={onValue}
+          options={options}
+        />
+        {line && (
+          <div
+            className={cn(
+              "px-1.5 text-xs",
+              line.warn ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground",
+            )}
+          >
+            {line.text}
+          </div>
+        )}
       </div>
       {menu && (
         <PropContextMenu
@@ -268,16 +379,21 @@ function PropertyRow({
 function ValueEditor({
   prop,
   onValue,
+  options,
 }: {
   prop: Prop;
   onValue: (v: PropValue) => void;
+  options: Option[];
 }) {
+  const listId = useId();
+  if (prop.kind === "object") return <NestedValue value={prop.value} />;
   if (prop.kind === "tags" || prop.kind === "list") {
     return (
       <ListEditor
-        value={Array.isArray(prop.value) ? prop.value : []}
+        value={Array.isArray(prop.value) ? (prop.value as string[]) : []}
         isTags={prop.kind === "tags"}
         onValue={onValue}
+        options={options}
       />
     );
   }
@@ -295,25 +411,36 @@ function ValueEditor({
     return <DateEditor prop={prop} onValue={onValue} />;
   }
   const type = prop.kind === "number" ? "number" : "text";
+  const suggestable = type === "text" && options.length > 0;
   return (
-    <input
-      type={type}
-      defaultValue={prop.value == null ? "" : String(prop.value)}
-      placeholder="Empty"
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
-      }}
-      onBlur={(e) =>
-        onValue(
-          prop.kind === "number"
-            ? e.target.value === ""
-              ? 0
-              : Number(e.target.value)
-            : e.target.value,
-        )
-      }
-      className="w-full rounded bg-transparent px-1.5 py-0.5 outline-none hover:bg-accent/40 focus:bg-accent/50"
-    />
+    <>
+      {suggestable && (
+        <datalist id={listId}>
+          {options.map((o) => (
+            <option key={o.value} value={o.value} label={o.label} />
+          ))}
+        </datalist>
+      )}
+      <input
+        type={type}
+        list={suggestable ? listId : undefined}
+        defaultValue={prop.value == null ? "" : String(prop.value)}
+        placeholder="Empty"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        onBlur={(e) =>
+          onValue(
+            prop.kind === "number"
+              ? e.target.value === ""
+                ? 0
+                : Number(e.target.value)
+              : e.target.value,
+          )
+        }
+        className="w-full rounded bg-transparent px-1.5 py-0.5 outline-none hover:bg-accent/40 focus:bg-accent/50"
+      />
+    </>
   );
 }
 
@@ -360,12 +487,16 @@ function ListEditor({
   value,
   isTags,
   onValue,
+  options,
 }: {
   value: string[];
   isTags: boolean;
   onValue: (v: string[]) => void;
+  options: Option[];
 }) {
   const [draft, setDraft] = useState("");
+  const listId = useId();
+  const remaining = options.map((o) => o.value).filter((o) => !value.includes(o));
   const commit = (s: string) => {
     const t = isTags ? normalizeTag(s) : s.trim();
     if (t && !value.includes(t)) onValue([...value, t]);
@@ -389,9 +520,24 @@ function ListEditor({
           </button>
         </span>
       ))}
+      {remaining.length > 0 && (
+        <datalist id={listId}>
+          {remaining.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+      )}
       <input
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        list={remaining.length > 0 ? listId : undefined}
+        onChange={(e) => {
+          // Picking a suggestion replaces the text in one go: add it at once.
+          const picked =
+            (e.nativeEvent as InputEvent).inputType === "insertReplacementText" ||
+            (e.nativeEvent as InputEvent).inputType === undefined;
+          if (picked && remaining.includes(e.target.value)) commit(e.target.value);
+          else setDraft(e.target.value);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === ",") {
             e.preventDefault();
@@ -539,7 +685,7 @@ function PropContextMenu({
       <div className="px-2 py-1 text-xs uppercase tracking-wide text-muted-foreground">
         Property type
       </div>
-      {TYPE_OPTIONS.map((o) => (
+      {current !== "object" && TYPE_OPTIONS.map((o) => (
         <button
           key={o.kind}
           type="button"
@@ -572,6 +718,7 @@ const KIND_ICON: Record<Kind, typeof Type> = {
   checkbox: SquareCheck,
   date: Calendar,
   datetime: CalendarClock,
+  object: Braces,
 };
 
 function KindIcon({ kind }: { kind: Kind }) {

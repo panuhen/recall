@@ -21,6 +21,7 @@ from ._base import (
     note_dict,
     resolve_user,
 )
+from .health import write_feedback
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
 _WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
@@ -49,6 +50,9 @@ def register(mcp: FastMCP) -> None:
         """Fetch a note's full body, frontmatter metadata and backlinks.
 
         `can_edit` tells you whether write tools will be accepted for this note.
+        `convention_hints` lists where the note departs from its workspace
+        guide, and `review` (when the note sets `review_every`) says when it
+        was last reviewed and whether it's overdue.
         """
         user = await resolve_user()
         if user is None:
@@ -57,7 +61,12 @@ def register(mcp: FastMCP) -> None:
         if note is None or role is None:
             return NOT_FOUND
         backlinks = await data.get_backlinks(note.id)
-        return note_dict(note, backlinks=backlinks, can_edit=role in WRITE_ROLES)
+        health = await data.note_health(note)
+        return note_dict(
+            note, backlinks=backlinks, can_edit=role in WRITE_ROLES,
+            review=health["review"], convention_hints=health["hints"],
+            guide_id=health["guide_id"],
+        )
 
     @mcp.tool(title="Create a note", annotations=_WRITE)
     async def create_note(
@@ -81,6 +90,9 @@ def register(mcp: FastMCP) -> None:
         near-identical to what you just wrote: read it, and prefer merging your
         content into it with `update_note` (then `delete` the redundant new
         note) unless the two genuinely need to stay separate.
+        If it carries `convention_hints`, the note departs from the workspace
+        guide (e.g. a misspelled tag) or has an unreadable `review_every`:
+        fix it with `update_note` unless the user asked for it that way.
 
         Diagrams: put a ```mermaid fenced code block in the body and recall
         renders it (flowchart, sequence, class, state, ER, gantt, mindmap, …).
@@ -115,6 +127,7 @@ def register(mcp: FastMCP) -> None:
         # similar, the assistant almost certainly just re-created it.
         if candidates and candidates[0]["score"] >= _DUP_SCORE:
             extra["possible_duplicate"] = candidates[0]
+        extra.update(await write_feedback(note))
         return note_dict(note, **extra)
 
     @mcp.tool(title="Update a note", annotations=_WRITE)
@@ -149,7 +162,8 @@ def register(mcp: FastMCP) -> None:
             current = await data.get_note(note.id)
             return {"error": "conflict",
                     "note": note_dict(current) if current else None}
-        return note_dict(updated, link_candidates=await _candidates(updated))
+        return note_dict(updated, link_candidates=await _candidates(updated),
+                         **await write_feedback(updated))
 
     @mcp.tool(title="Link one note to another", annotations=_WRITE)
     async def link_notes(note_id: str, target_title: str) -> dict:

@@ -122,7 +122,77 @@ export type Note = NoteSummary & {
   // endpoint sets it; mutating responses omit it (the caller is an editor by
   // definition), so treat `undefined` as editable.
   can_edit?: boolean;
+  // The workspace guide's view of this note (GET, PATCH and mark-reviewed set
+  // these). All empty/null when the workspace has no usable guide.
+  review?: NoteReview | null;
+  hints?: ConventionHint[];
+  conventions?: GuideConventions | null;
+  guide_id?: string | null;
 };
+
+// ── Workspace guide + health ────────────────────────────────
+
+// Where the note departs from its workspace guide. Advisory: never blocks.
+export type ConventionHint = { code: string; field: string | null; message: string };
+
+// Present when the note sets `review_every` (e.g. 6mo). A note never reviewed
+// counts from its creation date.
+export type NoteReview = {
+  every: string;
+  every_text: string;
+  reviewed: string | null;
+  due: string;
+  overdue: boolean;
+};
+
+// From the guide's flat `workspace_types` / `workspace_tags` lists.
+export type GuideConventions = {
+  owner: string | null;
+  types: string[];
+  tags: string[];
+};
+
+export type WorkspaceGuide = {
+  id: string;
+  title: string;
+  summary: string;
+  owner: string | null;
+  owner_left: boolean;
+  problems: string[];
+  conventions: GuideConventions | null;
+  guide_count: number;
+  updated_at: string;
+};
+
+export type HealthNote = {
+  id: string;
+  title: string;
+  type: string | null;
+  updated_at: string;
+};
+export type WorkspaceHealth = {
+  stale_after_months: number;
+  counts: Record<HealthListKey, number>;
+  overdue: (HealthNote & {
+    reviewed: string | null;
+    due: string;
+    every: string;
+    every_text: string;
+    owner: string | null;
+  })[];
+  not_edited: HealthNote[];
+  old_drafts: HealthNote[];
+  orphans: HealthNote[];
+  broken_links: { id: string; title: string; target_title: string; reason: "missing" | "trashed" }[];
+  owner_left: (HealthNote & { owner: string })[];
+};
+export type HealthListKey =
+  | "overdue"
+  | "not_edited"
+  | "old_drafts"
+  | "orphans"
+  | "broken_links"
+  | "owner_left";
 
 // A semantic neighbor of a note: same workspace, similar content, not already
 // linked from it. Drives the "Related" section under Backlinks. `score` is
@@ -318,6 +388,20 @@ export const linkUnlinkedMention = (noteId: string, sourceNoteId: string) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ source_note_id: sourceNoteId }),
   }).then((r) => json<Note>(r));
+
+export const getWorkspaceHealth = (projectId: string) =>
+  fetch(`/api/projects/${projectId}/health`, { cache: "no-store" }).then((r) =>
+    json<{ guide: WorkspaceGuide | null; health: WorkspaceHealth; can_edit: boolean }>(r),
+  );
+
+// Create the workspace's guide note, pre-filled from the types and tags in use.
+export const createGuide = (projectId: string) =>
+  fetch(`/api/projects/${projectId}/guide`, { method: "POST" }).then((r) => json<Note>(r));
+
+// Set `reviewed:` to today. Throws HttpError(409) if the note changed meanwhile
+// or its frontmatter is broken.
+export const markReviewed = (noteId: string) =>
+  fetch(`/api/notes/${noteId}/reviewed`, { method: "POST" }).then((r) => json<Note>(r));
 
 // ── Version history ─────────────────────────────────────────
 

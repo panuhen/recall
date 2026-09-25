@@ -37,8 +37,8 @@ const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["minute", 60],
 ];
 
-export function relativeTime(iso: string): string {
-  const secs = (new Date(iso).getTime() - Date.now()) / 1000; // <0 = past
+export function relativeTime(iso: string, now: number = Date.now()): string {
+  const secs = (new Date(iso).getTime() - now) / 1000; // <0 = past
   if (Math.abs(secs) < 45) return "just now";
   for (const [unit, size] of UNITS) {
     if (Math.abs(secs) >= size) return REL.format(Math.round(secs / size), unit);

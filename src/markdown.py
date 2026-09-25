@@ -5,6 +5,7 @@ functions derive the queryable projection and links from it.
 """
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -178,9 +179,23 @@ def rewrite_wikilink_target(body: str, old_title: str, new_title: str) -> tuple[
     return new_fm + new_rest, count
 
 
+def _json_safe(value: Any) -> Any:
+    """YAML reads an unquoted `2026-09-25` as a date, which JSONB can't store.
+    Turn dates (and anything else non-JSON) into strings, recursively."""
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
 def project_metadata(fm: dict[str, Any]) -> dict[str, Any]:
     """Split frontmatter into hot columns (type/tags/status) + leftover JSONB."""
-    fm = dict(fm)
+    fm = _json_safe(dict(fm))
     type_ = fm.pop("type", None)
     status = fm.pop("status", None)
     tags = fm.pop("tags", None)
@@ -198,6 +213,50 @@ def project_metadata(fm: dict[str, Any]) -> dict[str, Any]:
         "tags": tags,
         "metadata": fm,
     }
+
+
+def frontmatter_problem(body: str) -> str | None:
+    """Why a note's frontmatter block can't be read, or None when it's fine or
+    absent. parse_frontmatter silently treats a broken block as empty; this
+    says what went wrong so it can be shown."""
+    m = _FRONTMATTER_RE.match(body)
+    if not m:
+        return None
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        where = f" on line {mark.line + 2}" if mark is not None else ""
+        return f"The frontmatter isn't valid YAML{where}."
+    if data is not None and not isinstance(data, dict):
+        return "The frontmatter should be `key: value` lines."
+    return None
+
+
+def set_frontmatter_value(body: str, key: str, value: str) -> str | None:
+    """Set one top-level scalar `key: value` in the frontmatter, creating the
+    block when there is none. Other lines, comments and order are kept. `value`
+    is written as-is, so pass valid YAML (e.g. an ISO date). Returns None when
+    the existing frontmatter is broken, since editing it could lose data."""
+    m = _FRONTMATTER_RE.match(body)
+    line = f"{key}: {value}"
+    if not m:
+        return f"---\n{line}\n---\n{body}"
+    if frontmatter_problem(body) is not None:
+        return None
+    lines = m.group(1).split("\n")
+    key_re = re.compile(rf"^{re.escape(key)}[ \t]*:")
+    for i, existing in enumerate(lines):
+        if key_re.match(existing):
+            end = i + 1  # drop a block value's continuation lines too
+            while end < len(lines) and re.match(r"^(\s|-\s)", lines[end]):
+                end += 1
+            lines[i:end] = [line]
+            break
+    else:
+        lines.append(line)
+    new_body = "---\n" + "\n".join(lines) + "\n---\n" + body[m.end():]
+    return new_body if _valid_frontmatter_block(new_body) else None
 
 
 def slugify(title: str) -> str:

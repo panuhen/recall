@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 
 from .. import data
 from ..links import with_note_urls, workspace_url
+from .health import guide_for_agent
 from ._base import (
     FORBIDDEN,
     NOT_FOUND,
@@ -126,13 +127,19 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(title="List a workspace's contents", annotations=_READ)
     async def list_tree(project_id: str) -> dict:
-        """Folders and notes in a workspace — the whole tree in one call."""
+        """Folders and notes in a workspace — the whole tree in one call.
+
+        Also returns the workspace `guide` (null when it has none): a note whose
+        body describes the workspace's purpose and how to write there, and whose
+        `conventions` list the note types and tags to use. Follow it when you
+        create or edit notes in this workspace."""
         user = await resolve_user()
         if user is None:
             return UNAUTH
         if await data.get_membership_role(user.id, project_id) is None:
             return NOT_FOUND
         return {
+            "guide": await guide_for_agent(project_id),
             "folders": await data.list_folders(project_id),
             "notes": with_note_urls(await data.list_notes(project_id)),
         }

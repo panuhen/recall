@@ -22,9 +22,13 @@ sign-in (Better Auth), with a first-class MCP interface so AI assistants read th
 - **Sharing & roles** — invite teammates straight into a workspace under flat
   Viewer / Editor / Owner roles, plus org-wide workspaces for shared knowledge.
 - **Version history** — saves snapshot revisions you can browse, diff, and restore.
+- **Workspace guide & health** — plain frontmatter (`owner`, `review_every`) marks
+  notes for periodic review, an optional guide note lists a workspace's types and tags
+  for suggestions and misspelling hints, and the workspace page lists what needs
+  attention (overdue reviews, stale notes, broken links, orphans).
 - **Trash & retention** — deletes are soft and restorable, with optional scheduled
   auto-purge.
-- **MCP interface** — ~35 tools (read/write notes, search, graph, organize, share,
+- **MCP interface** — ~40 tools (read/write notes, search, graph, organize, share,
   history, diagram validation) over Streamable HTTP, so Claude, Copilot, and other
   assistants work against the same data with the user's own identity (browser
   OAuth consent, no PATs).
@@ -160,6 +164,53 @@ Tool results for notes and workspaces include a `url` on the web app (for
 example `https://recall.example.com/notes/<id>`), so an assistant can hand people
 a link. The backend builds it from `APP_URL`, falling back to `BETTER_AUTH_URL`;
 with neither set, `url` is null. A link grants no access by itself.
+
+### Workspace guide & health
+
+Everything here is ordinary flat frontmatter, so it stays editable in recall's
+Properties panel, Obsidian, or any text editor, and exports unchanged.
+
+A note can say who owns it and how often it should be checked:
+
+```yaml
+---
+type: runbook
+owner: someone@example.com
+review_every: 6mo        # 30d, 2w, 6mo, 1y
+reviewed: 2026-09-25     # set by "Mark as reviewed"
+---
+```
+
+When `review_every` has passed since `reviewed` (or since the note was created), the
+note shows a "Mark as reviewed" line, and the workspace page lists it as overdue.
+
+A workspace can also have one **guide**: a note with `type: guide`. "Add a guide" on
+the workspace page creates it, pre-filled with the types and tags already in use. Its
+body is prose for people and agents ("runbooks have an owner and `review_every: 6mo`"),
+and MCP `list_tree` returns it. Its frontmatter lists the workspace's types and tags:
+
+```yaml
+---
+type: guide
+owner: someone@example.com
+workspace_types: [runbook, decision, note]
+workspace_tags: [infra, auth, search]
+---
+```
+
+Properties then suggests those types and tags, and a note gets a soft hint for a close
+misspelling ("`infrastructure` isn't a tag here. Did you mean `infra`?"). Nothing
+blocks a save. A guide with a formatting problem switches its hints off and says why
+on the workspace page; no guide means no hints.
+
+The workspace page's **Health** section (hidden when empty) lists overdue reviews,
+owners who have left, broken links, old drafts, notes not edited in 6 months, and
+orphans. MCP exposes the same data as `workspace_health`, `stale_notes` and
+`mark_reviewed`, so a scheduled agent can do the review work. An example routine prompt:
+
+> Call `stale_notes` for the Infra workspace. For each runbook, check its steps against
+> the repo and the running services. If it's still right, call `mark_reviewed`. If not,
+> tell me what's out of date and propose the fix; don't edit it yourself.
 
 ### MCP callers in `AUTH_MODE=entra`
 

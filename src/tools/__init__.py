@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from .diagram import register as register_diagram
+from .health import register as register_health
 from .history import register as register_history
 from .insight import register as register_insight
 from .members import register as register_members
@@ -28,3 +29,4 @@ def register_tools(mcp: FastMCP) -> None:
     register_insight(mcp)
     register_history(mcp)
     register_diagram(mcp)
+    register_health(mcp)

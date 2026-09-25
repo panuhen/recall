@@ -22,6 +22,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 
 import { DiffView } from "@/components/editor/diff-view";
 import type { EditorMode } from "@/components/editor/markdown-editor";
+import { NoteHealth } from "@/components/editor/note-health";
 import { NoteHistoryPanel } from "@/components/editor/note-history-panel";
 import { NoteTitleInput } from "@/components/editor/note-title-input";
 import { ReadingView } from "@/components/editor/reading-view";
@@ -38,6 +39,7 @@ import {
   getRevision,
   listNotes,
   listRevisions,
+  markReviewed,
   NoteConflictError,
   restoreRevision,
   saveRevision,
@@ -565,6 +567,29 @@ export default function NotePage({
     }
   }, [noteId, doSave, toast]);
 
+  // "Mark as reviewed" writes `reviewed:` on the server, so first flush local
+  // edits; if they didn't land (conflict, error), stop rather than adopt a
+  // server body that would drop them.
+  const markAsReviewed = useCallback(async (): Promise<boolean> => {
+    try {
+      await doSave();
+      const saved = savedRef.current;
+      if (
+        !saved ||
+        latest.current.title !== saved.title ||
+        latest.current.body !== saved.body
+      ) {
+        toast("Save your changes first", "error");
+        return false;
+      }
+      await adopt(await markReviewed(noteId));
+      return true;
+    } catch {
+      toast("Could not mark as reviewed", "error");
+      return false;
+    }
+  }, [noteId, doSave, adopt, toast]);
+
   const restoreSelected = useCallback(async () => {
     if (!selectedRevId) return;
     const ok = await confirm({
@@ -750,12 +775,20 @@ export default function NotePage({
                     readOnly={!canEdit}
                     className="w-full resize-none overflow-hidden bg-transparent text-3xl font-semibold tracking-tight outline-none"
                   />
+                  <NoteHealth
+                    key={`health-${note.id}`}
+                    review={note.review}
+                    hints={note.hints}
+                    canEdit={canEdit}
+                    onMarkReviewed={markAsReviewed}
+                  />
                   {showProps && (mode === "live" || !canEdit) && (
                     <div className="space-y-1 border-b pb-4">
                       <div className="text-sm text-muted-foreground">Properties</div>
                       <NoteProperties
                         key={note.id}
                         note={note}
+                        conventions={note.conventions ?? null}
                         onChange={applyFrontmatter}
                         readOnly={!canEdit}
                       />
