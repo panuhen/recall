@@ -64,7 +64,8 @@ Docker is needed. Takes ~15 min (Postgres is the slow part).
 
 ## CI/CD (Azure DevOps → Container Apps)
 
-`../azure-pipelines.yml` builds both images in ACR and rolls the new tag out to
+`../azure-pipelines.example.yml` is a template: copy it to `azure-pipelines.yml`
+in the repo your Azure DevOps project builds from. It builds both images in ACR and rolls the new tag out to
 the three container apps on every push to `main`, gated behind a Test stage
 (lint + typecheck + tests). Set the pipeline `variables` (service connection,
 resource group, ACR name, app names) to your own — either in the YAML or as
@@ -72,7 +73,7 @@ Azure DevOps pipeline variables.
 
 1. **Grant the service connection's SP `Contributor` on the resource group**
    (covers `az acr build` + `az containerapp update`).
-2. **Register the pipeline** pointing at `/azure-pipelines.yml`.
+2. **Register the pipeline** pointing at your `/azure-pipelines.yml`.
 3. **Authorize** the pipeline to use the service connection on its first run,
    and approve creating the deployment Environment. Add approvals/gates on that
    Environment later if desired.

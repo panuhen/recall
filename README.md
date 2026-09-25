@@ -148,7 +148,7 @@ another audience, without the scope, or app-only (client-credentials) tokens are
 
 Copy `infra/provision.example.sh` to `infra/provision.sh`, fill in its CONFIG block, and
 run it to provision the stack on **Azure Container Apps** (MCP backend,
-web BFF, worker, Postgres Flexible + pgvector, and Key Vault for secrets). CI/CD via
-[`azure-pipelines.yml`](azure-pipelines.yml) rebuilds both images and rolls out the new
+web BFF, worker, Postgres Flexible + pgvector, and Key Vault for secrets). CI/CD: copy
+[`azure-pipelines.example.yml`](azure-pipelines.example.yml) to `azure-pipelines.yml`; it rebuilds both images and rolls out the new
 tag on every push to `main`. See [`infra/README.md`](infra/README.md) for the full
 resource list, required secrets, and gotchas.

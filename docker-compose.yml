@@ -40,7 +40,7 @@ services:
       # once before running pytest:
       #   docker compose exec backend pip install -r requirements-dev.txt
       #   docker compose exec backend python -m pytest tests
-      # CI installs requirements-dev.txt itself (see azure-pipelines.yml).
+      # CI installs requirements-dev.txt itself (see azure-pipelines.example.yml).
       - ./tests:/app/tests
       - ./pytest.ini:/app/pytest.ini
       - ./requirements-dev.txt:/app/requirements-dev.txt
