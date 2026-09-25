@@ -387,6 +387,34 @@ export function AppSidebar({ authMode }: { authMode: string }) {
   // The workspace whose landing page (/projects/<id>) is open, if any.
   const activeProjectId =
     typeof params.projectId === "string" ? params.projectId : null;
+  // The workspace the open note belongs to, for the outline around its block.
+  // Learned from a loaded tree when possible; otherwise from the note itself.
+  const [noteProject, setNoteProject] = useState<{ noteId: string; projectId: string } | null>(
+    null,
+  );
+  const treeProjectId = useMemo(() => {
+    if (!activeNoteId) return null;
+    for (const [pid, t] of Object.entries(trees)) {
+      if (t && typeof t === "object" && t.notes.some((n) => n.id === activeNoteId)) return pid;
+    }
+    return null;
+  }, [activeNoteId, trees]);
+  useEffect(() => {
+    if (!activeNoteId || treeProjectId || noteProject?.noteId === activeNoteId) return;
+    let cancelled = false;
+    getNote(activeNoteId)
+      .then((n) => {
+        if (!cancelled) setNoteProject({ noteId: activeNoteId, projectId: n.project_id });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNoteId, treeProjectId, noteProject?.noteId]);
+  const currentProjectId =
+    activeProjectId ??
+    treeProjectId ??
+    (noteProject?.noteId === activeNoteId ? noteProject.projectId : null);
   // The default target for the toolbar's quick New note / New folder actions.
   const personalId = state.kind === "ready" ? state.me.personal_project_id : "";
   const anyExpanded = expanded.size > 0;
@@ -1609,6 +1637,9 @@ export function AppSidebar({ authMode }: { authMode: string }) {
         className={cn(
           "rounded-md",
           isDropTarget && "bg-sidebar-accent ring-1 ring-primary/50",
+          // A quiet outline around the workspace holding the open note (or
+          // whose page is open), distinct from the row highlight.
+          !isDropTarget && p.id === currentProjectId && "ring-1 ring-inset ring-border",
           flash === `ws-${p.id}` && "recall-flash",
         )}
       >
