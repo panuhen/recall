@@ -1,6 +1,6 @@
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { SignJWT, jwtVerify } from "jose";
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
 export const AUTH_MODE = process.env.AUTH_MODE ?? "dev";
 export const SESSION_COOKIE = "recall_session";
@@ -57,12 +57,34 @@ export async function verifySession(token: string): Promise<SessionUser | null> 
   }
 }
 
+// The signed-in user. entra reads recall's own MSAL session cookie; betterauth
+// asks Better Auth (loaded lazily, so entra/dev never import it or open a
+// database pool). Dev mode has no session: callers use the stub user instead.
 export async function getSessionUser(
   req: NextRequest,
 ): Promise<SessionUser | null> {
+  if (AUTH_MODE === "betterauth") {
+    const { getAuth } = await import("@/lib/betterauth");
+    const session = await getAuth().api.getSession({ headers: req.headers });
+    if (!session) return null;
+    return {
+      oid: session.user.id,
+      upn: session.user.email.toLowerCase(),
+      name: session.user.name,
+    };
+  }
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   return verifySession(token);
+}
+
+// Routes that belong to one identity mode 404 in the others, so e.g. the MSAL
+// sign-in endpoints don't exist on a Better Auth deployment and vice versa.
+// Returns the 404 response to send, or null when the route is live.
+export function unlessAuthMode(mode: string): NextResponse | null {
+  return AUTH_MODE === mode
+    ? null
+    : NextResponse.json({ error: "not found" }, { status: 404 });
 }
 
 // Absolute origin of the app from the request (Host header), so redirects go

@@ -1,3 +1,5 @@
+import { connection } from "next/server";
+
 import { AppSidebar } from "@/components/app-sidebar";
 import { BrowseProvider } from "@/components/browse/browse-dialog";
 import { GraphDock } from "@/components/graph/graph-dock";
@@ -11,12 +13,16 @@ import { TabsProvider } from "@/components/tabs/tabs-context";
 import { TrashProvider } from "@/components/trash/trash-dialog";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
+import { AUTH_MODE } from "@/lib/auth";
 
-export default function AppLayout({
+export default async function AppLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // AUTH_MODE is a runtime setting (it picks the sidebar's sign-in/out flow);
+  // never prerender with the build environment's value.
+  await connection();
   return (
     <ConfirmProvider>
       <ToastProvider>
@@ -29,7 +35,7 @@ export default function AppLayout({
                     <TrashProvider>
                       <MobileNavProvider>
                         <div className="flex h-screen">
-                          <AppSidebar />
+                          <AppSidebar authMode={AUTH_MODE} />
                           <main className="flex min-w-0 flex-1 flex-col">
                             <MobileTopBar />
                             <EditorTabs />

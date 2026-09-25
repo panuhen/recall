@@ -40,3 +40,6 @@ web/*.tsbuildinfo
 # ── Logs ────────────────────────────────────────────────────
 *.log
 
+
+# ── Local planning notes (never pushed) ─────────────────────
+PLAN-*.md

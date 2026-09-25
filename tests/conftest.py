@@ -43,7 +43,9 @@ MAINT_DB_URL = _swap_db(_ORIG_DB_URL, "postgres")
 
 os.environ["DATABASE_URL"] = TEST_DB_URL
 # Dev auth so resolve_user()/mcp_identity() yield the stub user if ever reached.
-os.environ.setdefault("AUTH_MODE", "dev")
+# Forced, not defaulted: the compose .env may run the stack in entra or
+# betterauth mode, and tests that need another mode monkeypatch config.
+os.environ["AUTH_MODE"] = "dev"
 
 import asyncio  # noqa: E402
 import uuid  # noqa: E402

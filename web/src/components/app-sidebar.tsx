@@ -334,7 +334,24 @@ function RowMenuButton({
   );
 }
 
-export function AppSidebar() {
+// entra: the MSAL route clears the cookie and ends the Entra SSO session.
+// betterauth: Better Auth's sign-out (a POST) clears its session, then back to
+// the sign-in page. dev: there is no session to end.
+async function signOut(authMode: string) {
+  if (authMode === "entra") {
+    window.location.href = "/api/auth/signout";
+    return;
+  }
+  if (authMode === "betterauth") {
+    const { authClient } = await import("@/lib/auth-client");
+    await authClient.signOut().catch(() => {});
+    window.location.href = "/sign-in";
+    return;
+  }
+  window.location.href = "/";
+}
+
+export function AppSidebar({ authMode }: { authMode: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [trees, setTrees] = useState<Record<string, TreeState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1910,19 +1927,17 @@ export function AppSidebar() {
                 {
                   label: "Log out",
                   icon: <LogOut size={15} />,
-                  onClick: () => {
-                    window.location.href = "/api/auth/signout";
-                  },
+                  onClick: () => signOut(authMode),
                 },
               ]}
             />
           </div>
         ) : state.kind === "anon" ? (
           <a
-            href="/api/auth/signin"
+            href={authMode === "entra" ? "/api/auth/signin" : "/sign-in"}
             className={cn(buttonVariants({ size: "sm" }), "w-full")}
           >
-            Log in with Microsoft
+            {authMode === "entra" ? "Log in with Microsoft" : "Log in"}
           </a>
         ) : (
           <div className="px-1 text-xs text-muted-foreground">…</div>

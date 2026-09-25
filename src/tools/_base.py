@@ -23,7 +23,7 @@ async def resolve_user() -> "data.User | None":
     ident = auth.mcp_identity()
     if ident is None:
         return None
-    user = await data.get_user_by_oid(ident["oid"])
+    user = await data.get_user_by_external_id(ident["oid"])
     if user is None:
         user = await data.upsert_user(ident["oid"], ident["upn"], ident["name"])
         await data.ensure_personal_project(user.id)

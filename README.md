@@ -1,8 +1,8 @@
 # re:call
 
 A self-hostable corporate "second brain" — an Obsidian-like markdown notes app with
-semantic search, backlinks, and a knowledge graph, behind Entra ID (MSAL) SSO, with a
-first-class MCP interface so AI assistants read the same notes people write for each other.
+semantic search, backlinks, and a knowledge graph, behind Entra ID (MSAL) SSO or Google
+sign-in (Better Auth), with a first-class MCP interface so AI assistants read the same notes people write for each other.
 
 > Your team's knowledge base is also your AI's memory.
 
@@ -25,10 +25,11 @@ first-class MCP interface so AI assistants read the same notes people write for 
   auto-purge.
 - **MCP interface** — ~35 tools (read/write notes, search, graph, organize, share,
   history, diagram validation) over Streamable HTTP, so Claude, Copilot, and other
-  assistants work against the same data with the user's own Entra identity (browser
+  assistants work against the same data with the user's own identity (browser
   OAuth consent, no PATs).
-- **Entra ID SSO** — single-tenant MSAL sign-in through a Next.js BFF; a `dev` auth
-  mode injects a stub user for local work.
+- **Sign-in** — single-tenant Entra ID (MSAL) for M365 organizations, or Google via
+  Better Auth for everyone else, through a Next.js BFF; a `dev` auth mode injects a
+  stub user for local work.
 - **Export** — download a workspace or folder as a zip of standard markdown files.
 - **Installable PWA** — a web manifest and icons let the app install to the home
   screen and launch standalone, with a mobile-friendly, responsive UI throughout.
@@ -41,7 +42,8 @@ first-class MCP interface so AI assistants read the same notes people write for 
 - **Database:** PostgreSQL 16 + pgvector
 - **Migrations:** Alembic · **Background jobs:** procrastinate
 - **Embeddings:** Azure OpenAI `text-embedding-3-large` @ 1536 dims (no local model)
-- **Auth:** MSAL / Entra ID (single-tenant). Local dev runs a stub user via `AUTH_MODE=dev`.
+- **Auth:** MSAL / Entra ID (single-tenant) or Better Auth (Google). Local dev runs a stub
+  user via `AUTH_MODE=dev`.
 
 ## Quick start (local, Docker)
 
@@ -59,7 +61,58 @@ docker compose up -d      # postgres + backend + worker + web
 
 Local dev defaults to `AUTH_MODE=dev` (stub user, open MCP), so nothing external is
 required to start. To exercise real SSO, MCP OAuth, and embeddings, set `AUTH_MODE=entra`
-and fill in the Entra and Azure OpenAI values in `.env`.
+and fill in the Entra and Azure OpenAI values in `.env`, or use `AUTH_MODE=betterauth`
+(below).
+
+### Auth modes
+
+`AUTH_MODE` picks one identity provider for the whole instance, web UI and MCP alike.
+
+| Mode | For | Web sign-in | MCP (`/mcp`) auth |
+|---|---|---|---|
+| `entra` | An M365 / Entra ID organization | Microsoft (MSAL, single-tenant) | FastMCP `AzureProvider` OAuth proxy against your Entra app, plus delegated Entra tokens (below) |
+| `betterauth` | Everyone else | Google, via [Better Auth](https://www.better-auth.com) in the web app | Better Auth is the OAuth 2.1 authorization server (dynamic client registration); the backend validates its access tokens |
+| `dev` | Local only | None: a fixed stub user | Open, stub user |
+
+Nothing Better Auth-related loads, or touches the database, unless
+`AUTH_MODE=betterauth`. In `betterauth` mode, "org-wide" workspaces (`org_access =
+viewer`) are visible to every signed-in user of the instance, since there is no tenant
+to scope them to.
+
+### Better Auth setup (`AUTH_MODE=betterauth`)
+
+It runs on two public hosts: the web app (for example `https://recall.rapu.ai`), which
+is also the OAuth issuer, and the backend's MCP endpoint (for example
+`https://recall-mcp.rapu.ai`). MCP clients connect to `https://recall-mcp.rapu.ai/mcp`,
+get a `401` pointing at its protected-resource metadata, and from there find Better
+Auth on the web host to register and sign in.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create
+   an OAuth client ID of type *Web application*. Add the authorized redirect URI
+   `{BETTER_AUTH_URL}/api/auth/callback/google`, e.g.
+   `https://recall.rapu.ai/api/auth/callback/google` (or
+   `http://localhost:3000/api/auth/callback/google` locally).
+2. Set in `.env` (see the Better Auth block in `.env.example`):
+   - `AUTH_MODE=betterauth`
+   - `BETTER_AUTH_URL`: the public web origin, no trailing slash. Better Auth uses it
+     verbatim as the issuer, and the backend advertises it byte for byte.
+   - `BETTER_AUTH_SECRET`: `openssl rand -base64 32`. The web app refuses to start on
+     an `https` origin with this empty or left at the dev placeholder.
+   - `BETTER_AUTH_INTERNAL_URL`: where the backend reaches the web app to validate
+     tokens (`http://web:3000` in compose; defaults to `BETTER_AUTH_URL`).
+   - `MCP_PUBLIC_URL`: the MCP host, and add that host to `MCP_ALLOWED_HOSTS`.
+   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` from step 1.
+   - `BETTER_AUTH_SIGNUP`: `open` (default) lets any Google account register; `closed`
+     admits only `BETTER_AUTH_ALLOWED_EMAILS`, a comma-separated list of addresses or
+     `@domain` suffixes. The gate applies when an account is first created, so existing
+     users keep signing in. A blocked sign-up lands back on `/sign-in` with a
+     "Registration is closed" message.
+3. The web app needs `DATABASE_URL` too. At startup it creates its own `ba_*` tables
+   (`ba_user`, `ba_session`, `ba_oauth_application`, …) in recall's database, and exits
+   if that fails.
+
+A signed-in user's recall identity is their Better Auth user id, with Google's email
+and name. The people picker searches recall's own users instead of a directory.
 
 ### MCP client config
 
@@ -67,7 +120,7 @@ and fill in the Entra and Azure OpenAI values in `.env`.
 { "mcpServers": { "recall": { "type": "http", "url": "http://localhost:8004/mcp" } } }
 ```
 
-### MCP authentication modes (`AUTH_MODE=entra`)
+### MCP callers in `AUTH_MODE=entra`
 
 Two kinds of caller can reach `/mcp`, and both act **as a signed-in user** — re:call
 applies that user's workspace roles and records them as the author. There is no

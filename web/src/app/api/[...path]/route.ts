@@ -1,25 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { AUTH_MODE, getSessionUser } from "@/lib/auth";
+import { identityHeaders, resolveIdentity } from "@/lib/identity";
 
 // BFF proxy: resolves identity, injects X-User-* headers, forwards to the
-// backend. Dev mode uses a fixed stub user; entra mode reads the MSAL session.
+// backend. See lib/identity.ts for how each auth mode resolves the user.
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8004";
-
-type Identity = { id: string; upn: string; name: string };
-
-async function resolveIdentity(req: NextRequest): Promise<Identity | null> {
-  if (AUTH_MODE === "dev") {
-    return {
-      id: process.env.DEV_USER_OID ?? "00000000-0000-0000-0000-000000000001",
-      upn: process.env.DEV_USER_UPN ?? "dev@example.com",
-      name: process.env.DEV_USER_NAME ?? "Dev User",
-    };
-  }
-  const user = await getSessionUser(req);
-  if (!user) return null;
-  return { id: user.oid, upn: user.upn, name: user.name };
-}
 
 async function proxy(req: NextRequest, path: string[]) {
   const user = await resolveIdentity(req);
@@ -30,12 +15,9 @@ async function proxy(req: NextRequest, path: string[]) {
   const url = new URL(req.url);
   const target = `${BACKEND}/api/${path.join("/")}${url.search}`;
 
-  const headers = new Headers();
+  const headers = identityHeaders(user);
   const contentType = req.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
-  headers.set("x-user-id", user.id);
-  headers.set("x-user-upn", user.upn);
-  headers.set("x-user-name", user.name);
 
   const init: RequestInit = { method: req.method, headers, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "HEAD") {

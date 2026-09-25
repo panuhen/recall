@@ -272,11 +272,26 @@ async def api_search(request: Request) -> JSONResponse:
     return JSONResponse({"results": results, "semantic": qvec is not None})
 
 
+@mcp.custom_route("/api/users/search", methods=["GET"])
+async def api_users_search(request: Request) -> JSONResponse:
+    """People picker over recall's own users (betterauth mode has no Graph).
+
+    `q` matches name or upn (ILIKE); fewer than 2 characters returns nothing.
+    Results are `{oid, upn, name}`, the shape the Graph directory search uses."""
+    user = await _current_user(request)
+    if user is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    q = (request.query_params.get("q") or "").strip()
+    if len(q) < 2:
+        return JSONResponse({"results": []})
+    return JSONResponse({"results": await data.search_users(q, limit=10)})
+
+
 async def _current_user(request: Request):
     ident = resolve_identity(request)
     if ident is None:
         return None
-    user = await data.get_user_by_oid(ident["oid"])
+    user = await data.get_user_by_external_id(ident["oid"])
     if user is None:
         user = await data.upsert_user(ident["oid"], ident["upn"], ident["name"])
     return user

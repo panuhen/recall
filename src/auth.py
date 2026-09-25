@@ -1,9 +1,10 @@
 """Authentication / identity resolution.
 
-Two paths:
-- REST API (from the web BFF): the BFF validates the MSAL session and forwards
-  X-User-* headers over the trusted internal network. `resolve_identity` reads
-  them (falling back to the dev stub user when AUTH_MODE=dev).
+Paths:
+- REST API (from the web BFF): the BFF validates the web session (MSAL in
+  entra mode, Better Auth in betterauth mode) and forwards X-User-* headers
+  over the trusted internal network. `resolve_identity` reads them (falling
+  back to the dev stub user when AUTH_MODE=dev).
 - MCP (from AI assistants): FastMCP's `AzureProvider` (see `build_mcp_auth`)
   runs the browser OAuth flow against Entra and validates the returned JWT.
   `mcp_identity` reads the validated token's claims (falling back to the dev
@@ -14,16 +15,28 @@ Two paths:
   by a plain `JWTVerifier` (see `_build_delegated_verifier`) chained after the
   `AzureProvider`; the user is resolved from the same claims, so authorship
   and workspace rights are the human's, never the backend's.
+- MCP in betterauth mode: the web app's Better Auth `mcp()` plugin is the OAuth
+  2.1 authorization server (with dynamic client registration); this backend is
+  only a resource server. Its access tokens are opaque, so
+  `BetterAuthTokenVerifier` validates each one against Better Auth's
+  `/mcp/get-session` and reads email/name from the `ba_user` table.
 """
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
 from typing import Optional
 
+import httpx
 import jwt
+from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from jwt import PyJWKClient
+from mcp.server.auth.routes import build_resource_metadata_url, cors_middleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from . import config
 
@@ -31,7 +44,10 @@ log = logging.getLogger("recall.auth")
 
 
 def resolve_identity(request: Request) -> Optional[dict]:
-    """Resolve the caller from BFF-injected headers (or the dev stub user)."""
+    """Resolve the caller from BFF-injected headers (or the dev stub user).
+
+    Same contract in entra and betterauth mode: `x-user-id` is the provider's
+    user id (Entra oid / Better Auth user id), `x-user-upn` the email."""
     oid = request.headers.get("x-user-id")
     upn = request.headers.get("x-user-upn")
     name = request.headers.get("x-user-name")
@@ -131,18 +147,241 @@ def _build_delegated_verifier() -> Optional[JWTVerifier]:
     )
 
 
+# ── MCP OAuth (Better Auth as authorization server) ─────────
+
+# Rejected tokens are cached too, bounded because the caller controls the key
+# space; successes are bounded the same way for symmetry.
+_BA_CACHE_MAX = 10_000
+
+
+class BetterAuthTokenVerifier(TokenVerifier):
+    """Validate Better Auth's opaque MCP access tokens.
+
+    Better Auth exposes no RFC 7662 introspection endpoint; its own resource
+    server helper calls `GET {basePath}/mcp/get-session` with the bearer, so we
+    do the same. That endpoint answers 200 with a JSON `null` body for an
+    invalid or expired token, so the status code alone proves nothing. (The
+    advertised `/mcp/userinfo` does not exist in better-auth 1.6.)
+
+    Both verdicts are cached per token for `cache_ttl` seconds: without a
+    negative cache every request with a garbage bearer would cost one call to
+    the web app, a request-for-request amplification against it. A rejected
+    token never becomes valid, so caching the rejection is safe. Upstream
+    trouble (5xx, other 4xx, network errors) is never cached, or an outage
+    would keep rejecting valid tokens after it ends.
+
+    The claims carry `oid` = Better Auth user id plus `email` / `name` from
+    `ba_user`, so `mcp_identity` resolves them exactly like Entra claims.
+    """
+
+    def __init__(
+        self,
+        *,
+        internal_url: str,
+        cache_ttl: int = 60,
+        cache_max: int = _BA_CACHE_MAX,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
+        super().__init__()
+        self.session_url = f"{internal_url.rstrip('/')}/api/auth/mcp/get-session"
+        self.cache_ttl = cache_ttl
+        self.cache_max = cache_max
+        self._transport = transport  # tests inject an httpx.MockTransport
+        self._valid: dict[str, tuple[float, AccessToken]] = {}
+        self._rejected: dict[str, float] = {}
+
+    # Crude but bounded: a flood pays a full refill, the cache never grows past
+    # the cap.
+    def _put(self, cache: dict, token: str, value) -> None:
+        if len(cache) >= self.cache_max:
+            cache.clear()
+        cache[token] = value
+
+    def _reject(self, token: str) -> None:
+        self._put(self._rejected, token, time.monotonic() + self.cache_ttl)
+
+    def _cached(self, token: str) -> tuple[bool, Optional[AccessToken]]:
+        """(hit, result) from either cache, evicting expired entries."""
+        now = time.monotonic()
+        hit = self._valid.get(token)
+        if hit is not None:
+            if hit[0] >= now:
+                return True, hit[1]
+            del self._valid[token]
+        expires_at = self._rejected.get(token)
+        if expires_at is not None:
+            if expires_at >= now:
+                return True, None
+            del self._rejected[token]
+        return False, None
+
+    async def _load_user(self, user_id: str) -> Optional[dict]:
+        """email/name from Better Auth's user table (same database as recall)."""
+        from .state import get_pool  # lazy: keep this module import-light
+
+        pool = await get_pool()
+        row = await pool.fetchrow(
+            "SELECT id, email, name FROM ba_user WHERE id = $1", user_id
+        )
+        return dict(row) if row else None
+
+    async def verify_token(self, token: str) -> Optional[AccessToken]:
+        hit, cached = self._cached(token)
+        if hit:
+            return cached
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
+                resp = await client.get(
+                    self.session_url, headers={"Authorization": f"Bearer {token}"}
+                )
+        except httpx.HTTPError as exc:
+            log.error("Better Auth get-session unreachable: %s", exc)
+            return None
+
+        if resp.status_code == 401:
+            self._reject(token)
+            return None
+        if resp.status_code >= 400:
+            log.error("Better Auth get-session returned %s", resp.status_code)
+            return None
+
+        try:
+            session = resp.json()
+        except ValueError:
+            log.error("Better Auth get-session returned a non-JSON body")
+            return None
+        user_id = session.get("userId") if isinstance(session, dict) else None
+        if not user_id:
+            self._reject(token)
+            return None
+
+        user = await self._load_user(user_id)
+        if user is None:
+            # Token outlived its user row; not cached, it costs one lookup.
+            log.warning("Better Auth token for unknown user %s", user_id)
+            return None
+
+        expires_at = _epoch(session.get("accessTokenExpiresAt"))
+        scope = session.get("scopes") or ""
+        access = AccessToken(
+            token=token,
+            client_id=session.get("clientId") or "",
+            scopes=scope.split(),
+            expires_at=expires_at,
+            subject=user_id,
+            claims={
+                "sub": user_id,
+                "oid": user_id,
+                "email": user["email"] or "",
+                "name": user["name"] or "",
+                "client_id": session.get("clientId"),
+                "scope": scope,
+            },
+        )
+        ttl = self.cache_ttl
+        if expires_at is not None:
+            ttl = min(ttl, expires_at - time.time())
+        if ttl > 0:
+            self._put(self._valid, token, (time.monotonic() + ttl, access))
+        return access
+
+
+def _epoch(value) -> Optional[int]:
+    """Better Auth serialises dates as ISO-8601 strings (`...Z`)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+class BetterAuthProvider(RemoteAuthProvider):
+    """RemoteAuthProvider whose protected-resource metadata keeps the issuer verbatim.
+
+    The MCP SDK's `create_protected_resource_routes` types
+    `authorization_servers` as `list[AnyHttpUrl]`, and Pydantic normalises a
+    bare origin by appending a slash — advertising `http://host/` while Better
+    Auth's own authorization-server metadata says `http://host`. RFC 8414 wants
+    the two byte-identical, and a strict client (Claude.ai) fails the connect
+    at "couldn't register". So the RFC 9728 route is hand-rolled, at the exact
+    path the 401's WWW-Authenticate advertises.
+    """
+
+    def __init__(self, token_verifier: TokenVerifier, issuer: str, base_url: str):
+        super().__init__(
+            token_verifier=token_verifier,
+            authorization_servers=[issuer],  # type: ignore[list-item] — kept a str
+            base_url=base_url,
+            resource_name="recall",
+        )
+        self.issuer = issuer
+
+    def get_routes(self, mcp_path: str | None = None) -> list[Route]:
+        self.set_mcp_path(mcp_path)
+        resource_url = self._get_resource_url(mcp_path)
+        if resource_url is None:
+            return []
+        body = {
+            "resource": str(resource_url),
+            "authorization_servers": [self.issuer],
+            "bearer_methods_supported": ["header"],
+            "resource_name": self.resource_name,
+        }
+
+        async def metadata(_request: Request) -> JSONResponse:
+            return JSONResponse(body, headers={"Cache-Control": "public, max-age=3600"})
+
+        path = httpx.URL(str(build_resource_metadata_url(resource_url))).path
+        return [
+            Route(
+                path,
+                endpoint=cors_middleware(metadata, ["GET", "OPTIONS"]),
+                methods=["GET", "OPTIONS"],
+            )
+        ]
+
+
+def _build_betterauth_auth():
+    """The /mcp provider for betterauth mode, or None (open) when unconfigured."""
+    if not config.BETTER_AUTH_URL:
+        log.warning(
+            "MCP auth: betterauth mode but BETTER_AUTH_URL unset — /mcp left "
+            "UNAUTHENTICATED."
+        )
+        return None
+    try:
+        verifier = BetterAuthTokenVerifier(
+            internal_url=config.BETTER_AUTH_INTERNAL_URL or config.BETTER_AUTH_URL,
+            cache_ttl=config.BETTER_AUTH_TOKEN_CACHE_TTL,
+        )
+        provider = BetterAuthProvider(
+            verifier, issuer=config.BETTER_AUTH_URL, base_url=config.MCP_PUBLIC_URL
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("MCP auth: failed to build Better Auth provider (%s) — /mcp open", exc)
+        return None
+    log.info("MCP auth: Better Auth resource server (issuer %s)", config.BETTER_AUTH_URL)
+    return provider
+
+
 def build_mcp_auth():
     """Build the FastMCP auth provider for /mcp, or None to leave it open.
 
-    Returns an ``AzureProvider`` (Entra OAuth via an OAuthProxy: one registered
-    confidential app, browser consent, standard client discovery) when running
-    in "entra" mode with the client secret configured, wrapped in a
-    ``MultiAuth`` that also accepts delegated Entra tokens presented directly
+    In "betterauth" mode returns a :class:`BetterAuthProvider` (resource server
+    for Better Auth's opaque tokens). Otherwise returns an ``AzureProvider``
+    (Entra OAuth via an OAuthProxy: one registered confidential app, browser
+    consent, standard client discovery) when running in "entra" mode with the
+    client secret configured, wrapped in a ``MultiAuth`` that also accepts
+    delegated Entra tokens presented directly
     (see :func:`_build_delegated_verifier`). Otherwise returns None so /mcp is
     unauthenticated — the local-dev default, where `mcp_identity` serves the
     stub user. Never raises: a misconfiguration logs a warning and degrades to
     open rather than crashing the whole backend (REST included).
     """
+    if config.AUTH_MODE == "betterauth":
+        return _build_betterauth_auth()
     if config.AUTH_MODE != "entra":
         log.info("MCP auth: dev mode — /mcp is open, using the stub user")
         return None
@@ -217,9 +456,10 @@ def _mcp_token_claims() -> Optional[dict]:
 def mcp_identity() -> Optional[dict]:
     """Resolve the caller of an MCP tool to an identity dict {oid, upn, name}.
 
-    Mirrors `resolve_identity` for the REST side: reads the validated Entra
-    token's claims, falling back to the dev stub user when AUTH_MODE=dev so /mcp
-    works locally without OAuth. Returns None only when auth is required but no
+    Mirrors `resolve_identity` for the REST side: reads the validated token's
+    claims (Entra's, or the ones `BetterAuthTokenVerifier` builds), falling
+    back to the dev stub user when AUTH_MODE=dev so /mcp works locally without
+    OAuth. Returns None only when auth is required but no
     valid token is present.
     """
     claims = _mcp_token_claims()

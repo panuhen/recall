@@ -9,11 +9,15 @@ import {
   SESSION_COOKIE,
   STATE_COOKIE,
   TENANT_ID,
+  unlessAuthMode,
 } from "@/lib/auth";
 
 // Entra redirects here with an auth code. Exchange it, verify the tenant,
-// mint a session cookie, and send the user home.
+// mint a session cookie, and send the user home. Entra mode only; 404
+// otherwise.
 export async function GET(req: NextRequest) {
+  const gated = unlessAuthMode("entra");
+  if (gated) return gated;
   const origin = appOrigin(req);
   const url = new URL(req.url);
   const code = url.searchParams.get("code");

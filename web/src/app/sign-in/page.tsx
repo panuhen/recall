@@ -1,33 +1,40 @@
+import { connection } from "next/server";
+
+import { AuthShell } from "@/components/auth-shell";
 import { buttonVariants } from "@/components/ui/button";
+import { AUTH_MODE } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-export default function SignInPage() {
+import { GoogleSignIn } from "./google-sign-in";
+
+// Mode-aware sign-in: Microsoft (MSAL) in entra, Google (Better Auth) in
+// betterauth. In betterauth it doubles as the MCP OAuth login page, reached
+// with the authorize query intact (see GoogleSignIn).
+export default async function SignInPage() {
+  // AUTH_MODE is a runtime setting; never prerender this page at build.
+  await connection();
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-8">
-      {/* One column sized to its widest child (the button), so the logo — set to
-          w-full — matches the button's width exactly. */}
-      <div className="flex w-fit flex-col items-center">
-        <div className="recall-logo w-1/2 sm:w-2/3 aspect-square" aria-hidden>
-          {/* re:call mark: triangle outline with the base's left end cut parallel
-              to the left edge (retrieval). Static, no animation; fill is
-              --foreground so it reads black on light and white on dark. */}
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path
-              d="M12.00,0.94 L23.70,22.00 L5.45,22.00 L6.56,20.00 L20.30,20.00 L12.00,5.06 L2.59,22.00 L0.30,22.00Z"
-              fill="var(--foreground)"
-            />
-          </svg>
-        </div>
-
-        <h1 className="-mt-2 text-5xl font-semibold tracking-tight">re:call</h1>
-
+    <AuthShell>
+      {AUTH_MODE === "betterauth" ? (
+        <GoogleSignIn
+          enabled={Boolean(
+            process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
+          )}
+        />
+      ) : AUTH_MODE === "entra" ? (
         <a
           href="/api/auth/signin"
           className={cn(buttonVariants({ size: "lg" }), "mt-8")}
         >
           Log in with Microsoft
         </a>
-      </div>
-    </main>
+      ) : (
+        // Dev mode is always signed in as the stub user.
+        <a href="/" className={cn(buttonVariants({ size: "lg" }), "mt-8")}>
+          Continue as dev user
+        </a>
+      )}
+    </AuthShell>
   );
 }

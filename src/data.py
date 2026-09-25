@@ -8,6 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from . import config
 from .auth import mcp_client_name
 from .embeddings_provider import to_pgvector
 from .markdown import (
@@ -33,9 +34,10 @@ def _via() -> str | None:
 @dataclass
 class User:
     id: str
-    entra_oid: str
+    external_id: str
     upn: str
     display_name: str | None
+    idp: str = "entra"
 
 
 @dataclass
@@ -55,9 +57,10 @@ class Project:
 def _user(row) -> User:
     return User(
         id=str(row["id"]),
-        entra_oid=str(row["entra_oid"]),
+        external_id=row["external_id"],
         upn=row["upn"],
         display_name=row["display_name"],
+        idp=row["idp"],
     )
 
 
@@ -76,36 +79,45 @@ def _project(row) -> Project:
     )
 
 
-async def upsert_user(oid: str, upn: str, name: str | None) -> User:
-    """Insert or refresh the user provisioned from Entra.
+# Values allowed in users.idp (CHECK constraint, migration 009).
+_IDPS = ("entra", "betterauth", "dev")
 
-    Reconciles on entra_oid first (the stable id), then on upn — so a
-    pre-existing row (e.g. the dev-stub user with the same UPN) is claimed by
-    the real Entra identity instead of colliding on the unique upn constraint.
+
+async def upsert_user(
+    external_id: str, upn: str, name: str | None, idp: str | None = None
+) -> User:
+    """Insert or refresh the user provisioned from the identity provider.
+
+    `external_id` is the id the provider knows the user by: the Entra oid, or
+    the Better Auth user id (an opaque string). `idp` defaults to the running
+    AUTH_MODE. Reconciles on external_id first (the stable id), then on upn —
+    so a pre-existing row (e.g. the dev-stub user with the same UPN) is claimed
+    by the real identity instead of colliding on the unique upn constraint.
     """
+    idp = idp or (config.AUTH_MODE if config.AUTH_MODE in _IDPS else "entra")
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            if await conn.fetchrow("SELECT 1 FROM users WHERE entra_oid = $1::uuid", oid):
+            if await conn.fetchrow("SELECT 1 FROM users WHERE external_id = $1", external_id):
                 row = await conn.fetchrow(
-                    "UPDATE users SET upn = $2, display_name = $3, updated_at = now() "
-                    "WHERE entra_oid = $1::uuid RETURNING *",
-                    oid, upn, name,
+                    "UPDATE users SET upn = $2, display_name = $3, idp = $4, "
+                    "updated_at = now() WHERE external_id = $1 RETURNING *",
+                    external_id, upn, name, idp,
                 )
                 return _user(row)
 
             if await conn.fetchrow("SELECT 1 FROM users WHERE upn = $1", upn):
                 row = await conn.fetchrow(
-                    "UPDATE users SET entra_oid = $1::uuid, display_name = $3, "
+                    "UPDATE users SET external_id = $1, display_name = $3, idp = $4, "
                     "updated_at = now() WHERE upn = $2 RETURNING *",
-                    oid, upn, name,
+                    external_id, upn, name, idp,
                 )
                 return _user(row)
 
             row = await conn.fetchrow(
-                "INSERT INTO users (entra_oid, upn, display_name) "
-                "VALUES ($1::uuid, $2, $3) RETURNING *",
-                oid, upn, name,
+                "INSERT INTO users (external_id, upn, display_name, idp) "
+                "VALUES ($1, $2, $3, $4) RETURNING *",
+                external_id, upn, name, idp,
             )
             return _user(row)
 
@@ -227,7 +239,9 @@ async def get_membership_role(user_id: str, project_id: str) -> str | None:
     Explicit membership wins; failing that, an org-visible workspace grants
     'viewer' to anyone in the org. This is the single authorization chokepoint
     every route checks, so org-wide read access flows from here with no
-    per-route changes (writes still require owner/editor)."""
+    per-route changes (writes still require owner/editor). "The org" is every
+    user of this instance: the Entra tenant in entra mode, and everyone who has
+    signed in (any Google account Better Auth admits) in betterauth mode."""
     pool = await get_pool()
     return await pool.fetchval(
         """
@@ -243,10 +257,35 @@ async def get_membership_role(user_id: str, project_id: str) -> str | None:
     )
 
 
-async def get_user_by_oid(oid: str) -> User | None:
+async def get_user_by_external_id(external_id: str) -> User | None:
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM users WHERE entra_oid = $1::uuid", oid)
+    row = await pool.fetchrow("SELECT * FROM users WHERE external_id = $1", external_id)
     return _user(row) if row else None
+
+
+async def search_users(q: str, limit: int = 10) -> list[dict]:
+    """People-picker lookup over recall's own users (name or upn, ILIKE).
+
+    Returns `{oid, upn, name}` — the same shape the Graph-backed directory
+    search yields in entra mode, with `oid` = the provider's external id.
+    LIKE wildcards in `q` are escaped so they match literally.
+    """
+    pattern = "%" + re.sub(r"([\\%_])", r"\\\1", q) + "%"
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT external_id, upn, display_name FROM users
+        WHERE display_name ILIKE $1 OR upn ILIKE $1
+        ORDER BY display_name NULLS LAST, upn
+        LIMIT $2
+        """,
+        pattern,
+        limit,
+    )
+    return [
+        {"oid": r["external_id"], "upn": r["upn"], "name": r["display_name"] or ""}
+        for r in rows
+    ]
 
 
 # ── Membership & sharing ────────────────────────────────────

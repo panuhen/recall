@@ -1,12 +1,16 @@
+import { getSessionCookie } from "better-auth/cookies";
 import { NextRequest, NextResponse } from "next/server";
 
 const SESSION_COOKIE = "recall_session";
 
 // Redirect unauthenticated page views to the dedicated /sign-in page.
-// Only active in entra mode; dev mode is always "signed in".
-// (Next 16 renamed the "middleware" file convention to "proxy".)
+// Active in entra and betterauth modes; dev mode is always "signed in".
+// Cookie presence is only routing, never authentication: the BFF verifies the
+// session on every API call. (Next 16 renamed the "middleware" file convention
+// to "proxy".)
 export function proxy(req: NextRequest) {
-  if ((process.env.AUTH_MODE ?? "dev") !== "entra") {
+  const mode = process.env.AUTH_MODE ?? "dev";
+  if (mode !== "entra" && mode !== "betterauth") {
     return NextResponse.next();
   }
 
@@ -16,8 +20,19 @@ export function proxy(req: NextRequest) {
   if (pathname.startsWith("/api") || pathname === "/sign-in") {
     return NextResponse.next();
   }
+  // OAuth discovery metadata is fetched by MCP clients with no session.
+  if (mode === "betterauth" && pathname.startsWith("/.well-known/")) {
+    return NextResponse.next();
+  }
 
-  if (!req.cookies.has(SESSION_COOKIE)) {
+  // getSessionCookie also finds the __Secure- prefixed name Better Auth uses on
+  // https origins.
+  const signedIn =
+    mode === "betterauth"
+      ? Boolean(getSessionCookie(req))
+      : req.cookies.has(SESSION_COOKIE);
+
+  if (!signedIn) {
     const url = req.nextUrl.clone();
     url.pathname = "/sign-in";
     url.search = "";

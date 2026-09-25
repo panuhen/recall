@@ -29,8 +29,11 @@ MCP_ALLOWED_HOSTS = [
 ]
 
 # ── Auth ────────────────────────────────────────────────────
-# "dev"   → inject a fixed dev user, no token validation (LOCAL ONLY)
-# "entra" → validate Entra JWTs (issuer + audience + tid pinned to our tenant)
+# "dev"        → inject a fixed dev user, no token validation (LOCAL ONLY)
+# "entra"      → validate Entra JWTs (issuer + audience + tid pinned to our tenant)
+# "betterauth" → the web app runs Better Auth (Google sign-in) and is the OAuth
+#                authorization server for /mcp; this backend is a resource
+#                server that validates its opaque access tokens (see auth.py)
 AUTH_MODE = os.environ.get("AUTH_MODE", "dev").lower()
 
 DEV_USER = {
@@ -76,6 +79,20 @@ MCP_SCOPES = [
     for s in os.environ.get("MCP_SCOPES", "").split(",")
     if s.strip()
 ]
+
+# ── Better Auth (AUTH_MODE=betterauth) ──────────────────────
+# Public web origin, which is also Better Auth's OAuth issuer. Kept VERBATIM (no
+# trailing-slash normalisation): the protected-resource metadata must advertise
+# it byte-identical to the issuer in Better Auth's own authorization-server
+# metadata, or strict clients (Claude.ai) refuse to register.
+BETTER_AUTH_URL = os.environ.get("BETTER_AUTH_URL", "")
+# Where this backend reaches the web app for token validation. Inside compose
+# that's the service name (http://web:3000), not the public origin.
+BETTER_AUTH_INTERNAL_URL = (
+    os.environ.get("BETTER_AUTH_INTERNAL_URL", "") or BETTER_AUTH_URL
+).rstrip("/")
+# Seconds a get-session verdict (valid or rejected) is cached per token.
+BETTER_AUTH_TOKEN_CACHE_TTL = int(os.environ.get("BETTER_AUTH_TOKEN_CACHE_TTL", "60"))
 
 # ── Trash / retention ───────────────────────────────────────
 # Deletes are soft (archived_at). Items stay in Trash and are restorable until

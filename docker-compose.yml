@@ -25,6 +25,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD:-recall}@postgres:5432/${POSTGRES_DB:-recall}
       PYTHONPATH: /app
+      # AUTH_MODE=betterauth: the backend validates MCP tokens against the web
+      # app over the compose network, not via the public BETTER_AUTH_URL.
+      BETTER_AUTH_INTERNAL_URL: http://web:3000
     command: ["watchfiles", "python -m src.server", "src"]
     ports:
       - "8004:8765"

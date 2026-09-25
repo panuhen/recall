@@ -331,8 +331,11 @@ function McpSection() {
           <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
             <li>Add the configuration above to your client.</li>
             <li>
-              On first use it opens your browser to your organisation&rsquo;s
-              sign-in — approve access to connect.
+              On first use it opens your browser to{" "}
+              {info?.authMode === "betterauth"
+                ? "re:call\u2019s sign-in"
+                : "your organisation\u2019s sign-in"}{" "}
+              — approve access to connect.
             </li>
             <li>
               re:call&rsquo;s tools appear in the client, acting on your notes
@@ -341,7 +344,7 @@ function McpSection() {
           </ol>
         </div>
 
-        {info?.authMode !== "entra" && (
+        {info?.authMode === "dev" && (
           <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
             This instance runs in developer mode: the endpoint is unauthenticated
             and every call acts as the local dev user. Sign-in is enforced when
