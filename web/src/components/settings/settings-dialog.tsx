@@ -184,6 +184,17 @@ function AppearanceSection() {
           ]}
         />
       </Row>
+      <Row label="Time format" hint="Auto follows your browser's language settings.">
+        <Segmented
+          value={prefs.timeFormat}
+          onChange={(v) => setPref("timeFormat", v)}
+          options={[
+            { value: "auto", label: "Auto" },
+            { value: "12h", label: "12-hour" },
+            { value: "24h", label: "24-hour" },
+          ]}
+        />
+      </Row>
       <Row
         label="Code highlighting"
         hint="Colour code blocks by syntax when reading. Language is auto-detected; tagging a fence (```lang) stays optional."

@@ -17,6 +17,10 @@ export type PropertiesDefault = "auto" | "always" | "never";
 // you've pinned (default — the rest live in Browse), or all of them.
 export type OrgWorkspacesMode = "pinned" | "all";
 
+// Clock for absolute timestamps (Settings → Appearance). "auto" follows the
+// browser locale (en-US → 12-hour, fi-FI → 24-hour); the others force it.
+export type TimeFormat = "auto" | "12h" | "24h";
+
 export type Preferences = {
   properties: PropertiesDefault;
   backlinks: boolean;
@@ -27,6 +31,7 @@ export type Preferences = {
   // Syntax-highlight rendered code blocks (Settings → Appearance). On by
   // default — a standard, expected enhancement for a markdown app.
   codeHighlight: boolean;
+  timeFormat: TimeFormat;
   orgWorkspaces: OrgWorkspacesMode;
   showRecentOnHome: boolean;
 };
@@ -37,6 +42,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   related: false,
   metadata: false,
   codeHighlight: true,
+  timeFormat: "auto",
   orgWorkspaces: "pinned",
   showRecentOnHome: false,
 };
@@ -54,6 +60,7 @@ export function readPreferences(): Preferences {
       related: p.related === true,
       metadata: p.metadata === true,
       codeHighlight: p.codeHighlight !== false, // default on when key is missing
+      timeFormat: p.timeFormat === "12h" || p.timeFormat === "24h" ? p.timeFormat : "auto",
       orgWorkspaces: p.orgWorkspaces === "all" ? "all" : "pinned",
       showRecentOnHome: p.showRecentOnHome === true,
     };
