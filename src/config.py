@@ -103,13 +103,94 @@ BETTER_AUTH_TOKEN_CACHE_TTL = int(os.environ.get("BETTER_AUTH_TOKEN_CACHE_TTL", 
 TRASH_RETENTION_DAYS = int(os.environ.get("TRASH_RETENTION_DAYS", "0"))
 TRASH_PURGE_CRON = os.environ.get("TRASH_PURGE_CRON", "0 4 * * *")  # daily 04:00
 
-# ── Embeddings (Azure OpenAI only — no local model) ─────────
-EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "azure")
+# ── Embeddings ──────────────────────────────────────────────
+# EMBEDDING_PROVIDER picks the HTTP API the worker (and the search endpoint, for
+# the query vector) calls. There is no in-process model; a local model runs as
+# its own server (e.g. Ollama) and is reached through the "openai" provider.
+#   "azure"  → an Azure OpenAI embeddings deployment (AZURE_OPENAI_* below)
+#   "openai" → any OpenAI-compatible POST {EMBEDDING_BASE_URL}/embeddings:
+#              OpenAI itself, Ollama's /v1, vLLM, HF TEI, LiteLLM, …
+EMBEDDING_PROVIDERS = ("azure", "openai")
+_EMBEDDING_PROVIDER_RAW = os.environ.get("EMBEDDING_PROVIDER", "")
+
+# azure: the endpoint is a full deployment URL (…/deployments/<model>/embeddings
+# ?api-version=…). The model name only feeds the content hash (the deployment
+# decides the actual model).
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_EMBEDDING_ENDPOINT = os.environ.get("AZURE_OPENAI_EMBEDDING_ENDPOINT", "")
 AZURE_OPENAI_EMBEDDING_MODEL = os.environ.get(
     "AZURE_OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"
 )
-# 3-large is requested at 1536 dims (Matryoshka) to stay within pgvector's
-# 2000-dim HNSW index limit; pass this as the `dimensions` param on the call.
-AZURE_OPENAI_EMBEDDING_DIM = int(os.environ.get("AZURE_OPENAI_EMBEDDING_DIM", "1536"))
+
+# openai: base URL without the /embeddings suffix (a trailing slash is fine).
+# The key is optional: when empty no Authorization header is sent, which is what
+# most self-hosted servers expect.
+EMBEDDING_BASE_URL = (
+    os.environ.get("EMBEDDING_BASE_URL", "") or "https://api.openai.com/v1"
+).rstrip("/")
+EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "") or "text-embedding-3-large"
+
+# Vector size, for every provider. It must match what the model returns, and it
+# sets the notes.embedding column type: on startup the backend ALTERs the column
+# to vector(EMBEDDING_DIM) if it differs, and every note is re-embedded (see
+# db.reconcile_embedding_dim). 1..2000, because pgvector's HNSW index is capped
+# at 2000 dims for `vector`. AZURE_OPENAI_EMBEDDING_DIM is the older name, still
+# read as a fallback. text-embedding-3-large is requested at 1536 (Matryoshka).
+EMBEDDING_DIM_MAX = 2000
+_EMBEDDING_DIM_RAW = (
+    os.environ.get("EMBEDDING_DIM", "")
+    or os.environ.get("AZURE_OPENAI_EMBEDDING_DIM", "")
+    or "1536"
+)
+
+# Whether the openai provider sends the `dimensions` request param:
+#   "auto"  → only for OpenAI text-embedding-3* models, which support shortening
+#             (Matryoshka); self-hosted models often reject or ignore the param
+#   "true"  → always     "false" → never (the model must natively return EMBEDDING_DIM)
+# The azure provider always sends it.
+_EMBEDDING_SEND_DIMENSIONS_RAW = os.environ.get("EMBEDDING_SEND_DIMENSIONS", "")
+
+
+def parse_embedding_provider(raw: str) -> str:
+    """Normalise EMBEDDING_PROVIDER; ``ValueError`` if it names no provider."""
+    provider = (raw or "azure").strip().lower()
+    if provider not in EMBEDDING_PROVIDERS:
+        raise ValueError(
+            f"unknown EMBEDDING_PROVIDER={raw!r}; "
+            f"expected one of: {', '.join(EMBEDDING_PROVIDERS)}"
+        )
+    return provider
+
+
+def parse_embedding_dim(raw: str) -> int:
+    """Parse and range-check EMBEDDING_DIM; ``ValueError`` if out of range."""
+    try:
+        dim = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"EMBEDDING_DIM must be an integer, got {raw!r}") from None
+    if not 1 <= dim <= EMBEDDING_DIM_MAX:
+        raise ValueError(
+            f"EMBEDDING_DIM must be between 1 and {EMBEDDING_DIM_MAX} "
+            f"(pgvector's HNSW limit for `vector`), got {dim}"
+        )
+    return dim
+
+
+def parse_send_dimensions(raw: str) -> str:
+    """Normalise EMBEDDING_SEND_DIMENSIONS to "auto" / "true" / "false"."""
+    value = (raw or "auto").strip().lower()
+    if value == "auto":
+        return value
+    if value in ("true", "1", "yes", "on"):
+        return "true"
+    if value in ("false", "0", "no", "off"):
+        return "false"
+    raise ValueError(f"EMBEDDING_SEND_DIMENSIONS must be auto, true or false, got {raw!r}")
+
+
+# Validated at import, so a bad value stops the backend and the worker at
+# startup instead of failing every embed later.
+EMBEDDING_PROVIDER = parse_embedding_provider(_EMBEDDING_PROVIDER_RAW)
+EMBEDDING_DIM = parse_embedding_dim(_EMBEDDING_DIM_RAW)
+EMBEDDING_SEND_DIMENSIONS = parse_send_dimensions(_EMBEDDING_SEND_DIMENSIONS_RAW)

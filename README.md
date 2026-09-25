@@ -16,8 +16,9 @@ sign-in (Better Auth), with a first-class MCP interface so AI assistants read th
   knowledge graph shows how notes relate across a workspace.
 - **Diagrams** — ` ```mermaid ` fenced blocks render inline in both the editor and the
   reading view (flowchart, sequence, class, state, ER, gantt, mindmap, and more).
-- **Semantic + keyword search** — find notes by meaning (Azure OpenAI embeddings +
-  pgvector) or by exact text, from a fast command-palette dialog.
+- **Semantic + keyword search** — find notes by meaning (embeddings from Azure OpenAI
+  or any OpenAI-compatible server, stored in pgvector) or by exact text, from a fast
+  command-palette dialog.
 - **Sharing & roles** — invite teammates straight into a workspace under flat
   Viewer / Editor / Owner roles, plus org-wide workspaces for shared knowledge.
 - **Version history** — saves snapshot revisions you can browse, diff, and restore.
@@ -41,7 +42,8 @@ sign-in (Better Auth), with a first-class MCP interface so AI assistants read th
 - **Backend:** Python 3.12 + FastMCP — serves both REST `/api` and MCP `/mcp` from one app
 - **Database:** PostgreSQL 16 + pgvector
 - **Migrations:** Alembic · **Background jobs:** procrastinate
-- **Embeddings:** Azure OpenAI `text-embedding-3-large` @ 1536 dims (no local model)
+- **Embeddings:** Azure OpenAI `text-embedding-3-large` @ 1536 dims by default, or any
+  OpenAI-compatible endpoint (OpenAI, Ollama, vLLM, HF TEI, LiteLLM)
 - **Auth:** MSAL / Entra ID (single-tenant) or Better Auth (Google). Local dev runs a stub
   user via `AUTH_MODE=dev`.
 
@@ -62,7 +64,7 @@ docker compose up -d      # postgres + backend + worker + web
 Local dev defaults to `AUTH_MODE=dev` (stub user, open MCP), so nothing external is
 required to start. To exercise real SSO, MCP OAuth, and embeddings, set `AUTH_MODE=entra`
 and fill in the Entra and Azure OpenAI values in `.env`, or use `AUTH_MODE=betterauth`
-(below).
+(below). For embeddings without Azure, see [Embeddings](#embeddings).
 
 ### Auth modes
 
@@ -113,6 +115,40 @@ Auth on the web host to register and sign in.
 
 A signed-in user's recall identity is their Better Auth user id, with Google's email
 and name. The people picker searches recall's own users instead of a directory.
+
+### Embeddings
+
+The worker embeds each note in the background; search embeds the query inline and falls
+back to keyword-only if that fails. `EMBEDDING_PROVIDER` picks the API:
+
+| Provider | Calls | Settings |
+|---|---|---|
+| `azure` (default) | An Azure OpenAI embeddings deployment | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_EMBEDDING_ENDPOINT` (full deployment URL), `AZURE_OPENAI_EMBEDDING_MODEL` |
+| `openai` | `POST {EMBEDDING_BASE_URL}/embeddings` on OpenAI or any compatible server (Ollama's `/v1`, vLLM, HF TEI, LiteLLM) | `EMBEDDING_BASE_URL` (default `https://api.openai.com/v1`), `EMBEDDING_API_KEY` (optional; sent as `Authorization: Bearer` only when set), `EMBEDDING_MODEL` (default `text-embedding-3-large`) |
+
+`EMBEDDING_DIM` (default 1536, falling back to `AZURE_OPENAI_EMBEDDING_DIM`) must match
+the model's output and be between 1 and 2000, pgvector's HNSW limit; the backend refuses
+to start otherwise. Azure always sends it as the `dimensions` request parameter. For
+`openai`, `EMBEDDING_SEND_DIMENSIONS=auto` (default) sends it only to OpenAI's
+`text-embedding-3*` models, since self-hosted models often reject it; `true` or `false`
+override that.
+
+A self-hosted setup on the compose network, with Ollama serving `bge-m3` (1024 dims,
+multilingual including Finnish; `nomic-embed-text` is 768 dims and English-focused):
+
+```bash
+EMBEDDING_PROVIDER=openai
+EMBEDDING_BASE_URL=http://ollama:11434/v1
+EMBEDDING_MODEL=bge-m3
+EMBEDDING_DIM=1024
+```
+
+Changing the model or the dimension re-embeds every note. The model and dimension are
+part of each note's content hash, and when `EMBEDDING_DIM` differs from the
+`notes.embedding` column, the backend retypes the column on startup (clearing all
+vectors and rebuilding the HNSW index) before the backfill re-queues every note. Until
+the worker catches up, a note without a vector is found only by keyword. Restart the backend and the worker together
+so both use the new settings.
 
 ### MCP client config
 

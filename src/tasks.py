@@ -1,9 +1,10 @@
 """Procrastinate app and background tasks.
 
 Postgres-backed job queue — the jobs table lives in the same database, so there
-is no separate broker. Used for async Azure embedding: on note create/update we
-``defer`` an ``embed_note`` job; the worker process embeds via Azure OpenAI and
-writes the vector, with retries and idempotency.
+is no separate broker. Used for async embedding: on note create/update we
+``defer`` an ``embed_note`` job; the worker process embeds via the configured
+provider (``src/embeddings_provider.py``) and writes the vector, with retries
+and idempotency.
 
 The web/backend process only *defers* jobs (it opens the connector lazily on
 first enqueue). The separate ``worker`` container runs the jobs.
@@ -95,8 +96,8 @@ async def purge_expired_oauth_state(timestamp: int) -> None:
 @procrastinate_app.task(
     queue="embeddings",
     name="embed_note",
-    # Azure can be briefly rate-limited/unavailable; let the queue back off and
-    # retry rather than sleeping inside the task.
+    # The provider can be briefly rate-limited/unavailable; let the queue back
+    # off and retry rather than sleeping inside the task.
     retry=RetryStrategy(max_attempts=5, exponential_wait=4),
 )
 async def embed_note(*, note_id: str) -> None:
@@ -150,16 +151,30 @@ async def enqueue_embed(note_id: str) -> None:
 
 
 async def enqueue_backfill() -> int:
-    """Enqueue embed jobs for every live note missing a vector. Idempotent (the
-    task skips unchanged notes). Runs on startup to cover the enqueue-after-
-    commit crash window and initial rollout; also usable as a one-off."""
+    """Enqueue embed jobs for every live note whose vector is missing or stale.
+
+    Stale means the stored ``embedded_hash`` differs from ``content_hash`` of
+    the note's current text, which also covers a model or dim switch (both are
+    in the hash). Idempotent (the task skips unchanged notes). Runs on startup
+    to cover the enqueue-after-commit crash window, the initial rollout, and a
+    provider change; also usable as a one-off."""
     await _ensure_open()
     pool = await get_pool()
-    rows = await pool.fetch(
-        "SELECT id FROM notes WHERE archived_at IS NULL AND embedding IS NULL"
-    )
-    for r in rows:
-        await enqueue_embed(str(r["id"]))
-    if rows:
-        log.info("enqueued %d embedding backfill job(s)", len(rows))
-    return len(rows)
+    todo: list[str] = []
+    async with pool.acquire() as conn, conn.transaction():
+        # A cursor keeps memory flat: every live note's body is read once.
+        async for r in conn.cursor(
+            "SELECT id, title, body, type, tags, embedded_hash, "
+            "       embedding IS NULL AS missing "
+            "FROM notes WHERE archived_at IS NULL",
+            prefetch=500,
+        ):
+            if r["missing"] or r["embedded_hash"] != content_hash(
+                build_embed_text(r["title"], r["body"], list(r["tags"]), r["type"])
+            ):
+                todo.append(str(r["id"]))
+    for note_id in todo:
+        await enqueue_embed(note_id)
+    if todo:
+        log.info("enqueued %d embedding backfill job(s)", len(todo))
+    return len(todo)

@@ -12,7 +12,10 @@ from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
-if config.config_file_name is not None:
+# The alembic CLI configures logging from alembic.ini. When the app runs the
+# migrations (db.run_migrations) it opts out: fileConfig would otherwise reset
+# the root level and disable every already-created `recall.*` logger.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 

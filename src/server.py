@@ -5,7 +5,8 @@ Serves, from a single app:
   (search, notes, organize, trash, insight, history) plus a `ping` liveness check
 - the REST /api the web BFF calls, and a plain /health endpoint it can poll
 
-Runs `alembic upgrade head` on startup before serving.
+Runs `alembic upgrade head` on startup before serving, then fits the
+notes.embedding column to EMBEDDING_DIM (see db.reconcile_embedding_dim).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 
 from . import config, data, state, tasks
 from .auth import build_mcp_auth, resolve_identity
-from .db import run_migrations
+from .db import reconcile_embedding_dim_at_startup, run_migrations
 from .embeddings_provider import embed_query
 from .oauth_ui import apply_recall_oauth_branding
 from .tools import register_tools
@@ -48,9 +49,10 @@ MCP_ICONS = [
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP):
-    """Startup/shutdown hooks. On boot, enqueue embeddings for any notes missing
-    a vector — self-healing for the enqueue-after-commit crash window and the
-    initial rollout. Fire-and-forget so a slow queue never blocks readiness."""
+    """Startup/shutdown hooks. On boot, enqueue embeddings for any notes whose
+    vector is missing or stale (content, model or dim changed) — self-healing
+    for the enqueue-after-commit crash window, the initial rollout, and a
+    provider/model/dim switch. Errors are logged, never fatal."""
     try:
         await tasks.enqueue_backfill()
     except Exception as exc:  # noqa: BLE001
@@ -1085,6 +1087,10 @@ async def api_restore_revision(request: Request) -> JSONResponse:
 
 def main() -> None:
     run_migrations()
+    # Before serving (and so before the lifespan backfill): if EMBEDDING_DIM
+    # changed, retype the column and null every vector so the backfill
+    # re-embeds them all. A no-op when the size already matches.
+    reconcile_embedding_dim_at_startup()
     log.info("Starting recall MCP server on %s:%s", config.MCP_HOST, config.MCP_PORT)
     mcp.run(
         transport="http",

@@ -6,8 +6,8 @@ Hermetic, and hard-isolated from the dev database:
   dev DB, which holds real notes). The URL is derived from ``DATABASE_URL`` by
   swapping only the database name, so it points at the same Postgres server.
 * External side-effects are monkeypatched to no-ops: the embedding job enqueue
-  (``data.enqueue_embed``) and the Azure query-embedding call (``embed_query``).
-  No Azure, no procrastinate worker.
+  (``data.enqueue_embed``) and the query-embedding call (``embed_query``).
+  No embedding provider, no procrastinate worker.
 * Each test gets truncated tables (hard-guarded to ``recall_test``) and a fresh
   asyncpg pool bound to that test's event loop.
 
@@ -55,7 +55,7 @@ import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 
 from src import config, data, state  # noqa: E402
-from src.db import run_migrations  # noqa: E402
+from src.db import reconcile_embedding_dim, run_migrations  # noqa: E402
 
 # Belt-and-suspenders: if config was imported before we set the env var, force
 # the module attribute to the test URL too.
@@ -84,6 +84,16 @@ async def _noop_async(*args, **kwargs):
     return None
 
 
+async def _reset_embedding_dim() -> None:
+    """Put notes.embedding back to the configured size, in case an interrupted
+    run of the reconcile test left recall_test at another one."""
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await reconcile_embedding_dim(conn, config.EMBEDDING_DIM)
+    finally:
+        await conn.close()
+
+
 async def _ensure_test_db() -> None:
     conn = await asyncpg.connect(MAINT_DB_URL)
     try:
@@ -103,6 +113,7 @@ def _database():
     psycopg2), so they don't touch the per-test event loops."""
     asyncio.run(_ensure_test_db())
     run_migrations()  # alembic upgrade head against TEST_DB_URL (env set above)
+    asyncio.run(_reset_embedding_dim())
     yield
 
 
