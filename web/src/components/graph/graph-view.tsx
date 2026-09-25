@@ -29,10 +29,12 @@ type GNode = GraphViewNode & { deg: number; r: number; x?: number; y?: number };
 // labels always show as anchors, so a large graph stays tidy.
 const LABEL_ZOOM = 1.5;
 const BASE_R: Record<GraphViewKind, number> = { project: 7, folder: 4.5, note: 2.5 };
-// Wikilink arrowhead geometry, in graph (world) units, so it scales with the
-// nodes. Length along the edge + half-width across it.
-const ARROW_LEN = 1;
-const ARROW_HALF = 0.4;
+// Wikilink arrowhead geometry: length along the edge + half-width across it.
+// In graph (world) units so it scales with the nodes when zoomed in, but never
+// smaller on screen than ARROW_MIN_PX, so it stays visible when zoomed out.
+const ARROW_LEN = 1.5;
+const ARROW_HALF = 0.6;
+const ARROW_MIN_PX = 4;
 
 type Colors = { fg: string; muted: string; font: string };
 
@@ -227,14 +229,16 @@ export function GraphView({
             const highlighted = hi.current.links.has(l);
             const { color, alpha } = edgeStyle(l, colors, !!hover, highlighted);
 
-            // Segment runs edge-to-edge; wikilinks reserve the last ARROW_LEN
+            // Segment runs edge-to-edge; wikilinks reserve the last headLen
             // for the arrowhead, so the line ends at its base (the tip lands on
             // the target node's edge, the head shrinks for very short links).
             const startX = s.x + ux * sr;
             const startY = s.y + uy * sr;
             const tipX = t.x - ux * tr;
             const tipY = t.y - uy * tr;
-            const arrow = isLink ? Math.min(ARROW_LEN, len - sr - tr) : 0;
+            const headLen = Math.max(ARROW_LEN, ARROW_MIN_PX / scale);
+            const headHalf = headLen * (ARROW_HALF / ARROW_LEN);
+            const arrow = isLink ? Math.min(headLen, len - sr - tr) : 0;
             const endX = tipX - ux * arrow;
             const endY = tipY - uy * arrow;
 
@@ -253,8 +257,8 @@ export function GraphView({
               const py = ux;
               ctx.beginPath();
               ctx.moveTo(tipX, tipY);
-              ctx.lineTo(endX + px * ARROW_HALF, endY + py * ARROW_HALF);
-              ctx.lineTo(endX - px * ARROW_HALF, endY - py * ARROW_HALF);
+              ctx.lineTo(endX + px * headHalf, endY + py * headHalf);
+              ctx.lineTo(endX - px * headHalf, endY - py * headHalf);
               ctx.closePath();
               ctx.fillStyle = color;
               ctx.fill();
