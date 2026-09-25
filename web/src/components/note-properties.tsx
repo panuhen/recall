@@ -227,9 +227,11 @@ export function NoteProperties({
       <div className="space-y-1 text-sm">
         {props.map((p) => (
           <div key={p.id} className="flex items-baseline gap-3">
-            <div className="flex w-28 shrink-0 items-center gap-1.5 pt-0.5 text-muted-foreground">
+            <div className="flex w-28 shrink-0 items-center gap-1.5 pt-0.5 text-muted-foreground md:w-40">
               <KindIcon kind={p.kind} />
-              <span className="truncate">{p.key}</span>
+              <span className="truncate" title={p.key}>
+                {p.key}
+              </span>
             </div>
             <div className="min-w-0 flex-1">
               <ReadOnlyValue prop={p} />
@@ -321,10 +323,13 @@ function PropertyRow({
         setMenu({ x: e.clientX, y: e.clientY });
       }}
     >
-      <div className="flex w-28 shrink-0 items-center gap-1.5 pt-0.5 text-muted-foreground">
+      {/* Wider on desktop so keys like workspace_types fit; the title shows
+          the full key wherever it's still cut off (phones). */}
+      <div className="flex w-28 shrink-0 items-center gap-1.5 pt-0.5 text-muted-foreground md:w-40">
         <KindIcon kind={prop.kind} />
         <input
           value={keyDraft}
+          title={keyDraft}
           readOnly={prop.kind === "object"}
           autoFocus={prop.key === ""}
           placeholder="key"
