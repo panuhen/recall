@@ -5,8 +5,13 @@
 # `backend:8765`.
 #
 # Every setting comes from the environment (Coolify: the resource's Environment
-# Variables). `:?` marks the ones that must be set; the rest have safe defaults.
-# See .env.example for what each one means.
+# Variables). `${VAR:?}` marks the ones that must be set; the rest have safe
+# defaults. See .env.example for what each one means. Keep `:?` bare: Coolify
+# misreads a `:?message` that contains a hyphen as a variable name.
+#
+# Required: POSTGRES_PASSWORD (URL-safe, e.g. openssl rand -hex 24),
+# MCP_PUBLIC_URL (e.g. https://recall-mcp.example.com) and MCP_ALLOWED_HOSTS
+# (e.g. recall-mcp.example.com,backend,backend:*).
 
 name: recall
 
@@ -16,7 +21,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-recall}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong database password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: ${POSTGRES_DB:-recall}
     volumes:
       - recall_pgdata:/var/lib/postgresql/data
@@ -39,9 +44,9 @@ services:
       AUTH_MODE: ${AUTH_MODE:-betterauth}
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8765"
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?public MCP origin, e.g. https://recall-mcp.example.com}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?}
       # The public MCP host plus the in-network name the web BFF uses.
-      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?e.g. recall-mcp.example.com,backend,backend:*}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
       BETTER_AUTH_INTERNAL_URL: http://web:3000
       # entra mode only.
