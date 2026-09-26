@@ -51,7 +51,7 @@ services:
       BETTER_AUTH_INTERNAL_URL: http://web:3000
       # Same access list as the web service: MCP tokens of users no longer on
       # it are refused.
-      BETTER_AUTH_ACCESS: ${BETTER_AUTH_ACCESS:-${BETTER_AUTH_SIGNUP:-closed}}
+      BETTER_AUTH_ACCESS: ${BETTER_AUTH_ACCESS:-closed}
       BETTER_AUTH_ALLOWED_EMAILS: ${BETTER_AUTH_ALLOWED_EMAILS:-}
       # Web origin for the shareable links MCP tools return; defaults to
       # BETTER_AUTH_URL.
@@ -127,8 +127,7 @@ services:
       # origin without a real secret.
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
       # Who may sign in; the backend enforces the same list on MCP tokens.
-      # BETTER_AUTH_SIGNUP is the old name, still honored.
-      BETTER_AUTH_ACCESS: ${BETTER_AUTH_ACCESS:-${BETTER_AUTH_SIGNUP:-closed}}
+      BETTER_AUTH_ACCESS: ${BETTER_AUTH_ACCESS:-closed}
       BETTER_AUTH_ALLOWED_EMAILS: ${BETTER_AUTH_ALLOWED_EMAILS:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

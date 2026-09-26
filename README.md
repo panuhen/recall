@@ -115,7 +115,8 @@ Auth on the web host to register and sign in.
      restarting both services locks that person out within a minute; their notes and
      memberships stay. `closed` with an empty list refuses to start. A refused sign-in
      lands back on `/sign-in` with an "invite-only" message. Set both variables on the
-     web app and the backend. `BETTER_AUTH_SIGNUP` is the old name and still works.
+     web app and the backend. `BETTER_AUTH_SIGNUP` is the old name: the app still reads it, but
+     `docker-compose.prod.yml` passes only `BETTER_AUTH_ACCESS`.
 3. The web app needs `DATABASE_URL` too. At startup it creates its own `ba_*` tables
    (`ba_user`, `ba_session`, `ba_oauth_application`, …) in recall's database, and exits
    if that fails.
