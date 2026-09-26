@@ -20,8 +20,11 @@ def register(mcp: FastMCP) -> None:
         Fuses full-text and vector similarity (RRF) with a light recency tie-break.
         Returns ranked notes with a snippet: the passage around the matched
         words for a keyword hit, the note's opening for a meaning-only hit.
-        Check the snippet before calling `read_note` for a full body. For an
-        exact string (a name, error code, path or quote), use `grep`.
+        Each result also has `status` (e.g. `superseded`, `draft`) and
+        `created_via` / `updated_via`, the AI client that wrote and last edited
+        it (null means a person in the web UI). Check these and the snippet
+        before calling `read_note` for a full body. For an exact string (a
+        name, error code, path or quote), use `grep`.
 
         Args:
             query: What to look for. Natural language works (it's embedded).
@@ -51,8 +54,9 @@ def register(mcp: FastMCP) -> None:
         Each result has an `excerpt` of the matching lines in `grep -n -C1`
         format (`12:` a matching line, `11-` context, `--` between groups; line
         numbers count from the top of the note, frontmatter included), up to 5
-        matching lines per note, plus `match_count` for the whole note and
-        `title_match`. Most recently edited notes first. Often the excerpt is
+        matching lines per note, plus `match_count` for the whole note,
+        `title_match`, and the same `status` / `created_via` / `updated_via` as
+        `search`. Most recently edited notes first. Often the excerpt is
         enough; call `read_note` only when you need more.
 
         Args:
@@ -78,18 +82,25 @@ def register(mcp: FastMCP) -> None:
         type: str | None = None,
         tags: list[str] | None = None,
         status: str | None = None,
+        updated_by: str | None = None,
         limit: int = 50,
     ) -> dict:
-        """List notes by structured metadata (no relevance ranking).
+        """List notes by structured metadata, most recently edited first (no
+        relevance ranking).
 
         All filters AND together. Use this for "all open tasks", "everything
-        tagged X and Y", etc. For meaning-based lookup use `search` instead.
+        tagged X and Y", "what changed lately", "Bob's latest changes", etc.
+        Each result names its last editor (`updated_by`). For meaning-based
+        lookup use `search` instead.
 
         Args:
             project_id: Optional workspace scope.
             type: Frontmatter `type` (e.g. note, task, meeting).
             tags: Match notes carrying ALL of these tags.
             status: Frontmatter `status` (e.g. open, done).
+            updated_by: The last editor: part of their name ("bob"), or their
+                user id from `list_members` for an exact match. A note's creator
+                counts until someone else edits it.
             limit: Max results, 1–200 (default 50).
         """
         user = await resolve_user()
@@ -100,7 +111,7 @@ def register(mcp: FastMCP) -> None:
         limit = max(1, min(int(limit or 50), 200))
         notes = await data.query_notes(
             user.id, project_id=project_id, type=type, tags=tags,
-            status=status, limit=limit,
+            status=status, updated_by=updated_by, limit=limit,
         )
         return {"notes": with_note_urls(notes)}
 

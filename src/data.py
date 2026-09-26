@@ -2089,7 +2089,7 @@ fused AS (
     GROUP BY id
 )
 SELECT n.id, n.title, n.slug, n.project_id, p.name AS project_name,
-       n.folder_id, n.body, n.updated_at,
+       n.folder_id, n.body, n.updated_at, n.status, n.created_via, n.updated_via,
        EXISTS (SELECT 1 FROM kw WHERE kw.id = f.id) AS kw_hit,
        f.score * (1 + 0.1 / (1 + EXTRACT(EPOCH FROM (now() - n.updated_at)) / 86400 / 365))
            AS score
@@ -2133,6 +2133,14 @@ def _headline_snippet(content: str, headline: str) -> str:
     return ("" if whole.startswith(text) else "…") + text + ("" if whole.endswith(text) else "…")
 
 
+def _trust_fields(r) -> dict:
+    """What a search or grep result carries so the assistant can weigh it
+    before reading: `status` (e.g. superseded, draft) and which AI client
+    wrote and last edited it (None = the web UI, i.e. a person)."""
+    return {"status": r["status"], "created_via": r["created_via"],
+            "updated_via": r["updated_via"]}
+
+
 async def search_notes(
     user_id: str,
     query: str,
@@ -2169,6 +2177,7 @@ async def search_notes(
                 "project_name": r["project_name"],
                 "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
                 "snippet": snippet,
+                **_trust_fields(r),
                 "updated_at": r["updated_at"].isoformat(),
                 "score": float(r["score"]),
             }
@@ -2191,7 +2200,7 @@ async def grep_notes(
             SELECT id FROM projects WHERE org_access = 'viewer' AND archived_at IS NULL
         )
         SELECT n.id, n.title, n.slug, n.project_id, p.name AS project_name,
-               n.body, n.updated_at
+               n.body, n.updated_at, n.status, n.created_via, n.updated_via
         FROM notes n
         JOIN projects p ON p.id = n.project_id
         WHERE n.project_id IN (SELECT project_id FROM me)
@@ -2215,6 +2224,7 @@ async def grep_notes(
             "title_match": text.lower() in r["title"].lower(),
             "match_count": count,
             "excerpt": excerpt,
+            **_trust_fields(r),
             "updated_at": r["updated_at"].isoformat(),
         })
     return results
@@ -2331,10 +2341,15 @@ async def query_notes(
     type: str | None = None,
     tags: list[str] | None = None,
     status: str | None = None,
+    updated_by: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Pure structured query over the caller's accessible notes (no ranking).
-    Filters AND together; `tags` matches notes carrying ALL of the given tags."""
+    """Pure structured query over the caller's accessible notes, most recently
+    edited first. Filters AND together; `tags` matches notes carrying ALL of
+    the given tags. `updated_by` is the last editor's user id, or part of
+    their display name (case-insensitive). Deliberately not their email: the
+    result shows only the name, and matching emails would let a caller confirm
+    which address belongs to which name."""
     pool = await get_pool()
     rows = await pool.fetch(
         """
@@ -2344,19 +2359,24 @@ async def query_notes(
             SELECT id FROM projects WHERE org_access = 'viewer' AND archived_at IS NULL
         )
         SELECT n.id, n.title, n.slug, n.type, n.tags, n.status,
-               n.project_id, p.name AS project_name, n.folder_id, n.updated_at
+               n.project_id, p.name AS project_name, n.folder_id, n.updated_at,
+               n.updated_by, eu.display_name AS editor_name, eu.upn AS editor_upn
         FROM notes n
         JOIN projects p ON p.id = n.project_id
+        LEFT JOIN users eu ON eu.id = n.updated_by
         WHERE n.project_id IN (SELECT project_id FROM me)
           AND ($2::uuid IS NULL OR n.project_id = $2::uuid)
           AND ($3::text IS NULL OR n.type = $3)
           AND ($4::text IS NULL OR n.status = $4)
           AND ($5::text[] IS NULL OR n.tags @> $5)
+          AND ($7::text IS NULL OR n.updated_by::text = $7
+               OR strpos(lower(eu.display_name), lower($7)) > 0)
           AND n.archived_at IS NULL
         ORDER BY n.updated_at DESC
         LIMIT $6
         """,
         user_id, project_id, type, status, tags or None, limit,
+        (updated_by or "").strip() or None,
     )
     return [
         {
@@ -2369,6 +2389,7 @@ async def query_notes(
             "project_id": str(r["project_id"]),
             "project_name": r["project_name"],
             "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
+            "updated_by": _actor(r, "updated_by", "editor_name", "editor_upn"),
             "updated_at": r["updated_at"].isoformat(),
         }
         for r in rows

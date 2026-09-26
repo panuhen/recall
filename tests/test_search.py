@@ -101,3 +101,23 @@ async def test_semantic_only_snippet_is_the_opening(make_user, make_project):
 
     [hit] = await data.search_notes(user.id, "zzzunmatched", vector(3), None, 20)
     assert hit["snippet"] == "Opening line here."
+
+
+async def test_results_carry_status_and_client(monkeypatch, make_user, make_project):
+    """search and grep show whether a note is superseded and whether an AI
+    client or a person wrote it, so the assistant can weigh it unread."""
+    user = await make_user()
+    proj = await make_project(user)
+    await data.create_note(proj.id, "Old", "---\nstatus: superseded\n---\nthe pangolin plan", user.id)
+    monkeypatch.setattr("src.data.mcp_client_name", lambda: "Claude")
+    await data.create_note(proj.id, "New", "the pangolin plan, revised", user.id)
+
+    for results in (
+        await data.search_notes(user.id, "pangolin", None, None, 20),
+        await data.grep_notes(user.id, "pangolin", None, 20),
+    ):
+        by_title = {r["title"]: r for r in results}
+        assert by_title["Old"]["status"] == "superseded"
+        assert by_title["Old"]["created_via"] is None
+        assert by_title["New"]["status"] is None
+        assert by_title["New"]["created_via"] == "Claude" == by_title["New"]["updated_via"]

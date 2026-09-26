@@ -118,3 +118,26 @@ def _coro(value):
         return value
 
     return _c()
+
+
+async def test_query_notes_by_last_editor(make_user, make_project, add_member):
+    """`updated_by` matches the last editor by name fragment or user id, never
+    by email, and only among notes the caller can read."""
+    me = await make_user(name="Me")
+    bob = await make_user(name="Bob Builder", upn="bob@example.com")
+    shared = await make_project(me)
+    await add_member(shared, bob, "editor")
+    bobs_private = await make_project(bob)
+
+    edited = await data.create_note(shared.id, "Mine, edited by Bob", "v1", me.id)
+    await data.update_note(edited.id, None, "v2", bob.id)
+    created = await data.create_note(shared.id, "Bob's new note", "x", bob.id)
+    await data.create_note(shared.id, "Only mine", "x", me.id)
+    await data.create_note(bobs_private.id, "Bob's private", "x", bob.id)
+
+    by_name = await data.query_notes(me.id, updated_by="bob")
+    assert {n["id"] for n in by_name} == {edited.id, created.id}
+    assert by_name[0]["updated_by"] == {"id": bob.id, "name": "Bob Builder"}
+    assert {n["id"] for n in await data.query_notes(me.id, updated_by=bob.id)} == {
+        edited.id, created.id}
+    assert await data.query_notes(me.id, updated_by="bob@example.com") == []
