@@ -47,8 +47,11 @@ thinking. re:call gives it something reliable to think about.
 - Version history: browse, diff and restore earlier revisions.
 
 **Finding**
-- Search by meaning or by exact text from a command palette. Embeddings come from Azure
-  OpenAI or any OpenAI-compatible server, including a local Ollama.
+- Search by meaning or by keyword from a command palette, with a snippet around the
+  match. Embeddings come from Azure OpenAI or any OpenAI-compatible server, including a
+  local Ollama.
+- Assistants also get `grep`: exact-text search that returns just the matching lines, for
+  names, error codes, paths and quotes.
 - Backlinks and a graph view show how notes connect across a workspace.
 - Unlinked mentions: notes that name another note without linking to it.
 
@@ -246,10 +249,10 @@ on the workspace page; no guide means no hints.
 
 The workspace page's **Health** section (hidden when empty) lists overdue reviews,
 owners who have left, broken links, old drafts, notes not edited in 6 months, and
-orphans. MCP exposes the same data as `workspace_health`, `stale_notes` and
-`mark_reviewed`, so a scheduled agent can do the review work. An example routine prompt:
+orphans. MCP exposes the same data as `workspace_health`, plus `mark_reviewed`, so a
+scheduled agent can do the review work. An example routine prompt:
 
-> Call `stale_notes` for the Infra workspace. For each runbook, check its steps against
+> Call `workspace_health` for the Infra workspace. For each overdue runbook, check its steps against
 > the repo and the running services. If it's still right, call `mark_reviewed`. If not,
 > tell me what's out of date and propose the fix; don't edit it yourself.
 

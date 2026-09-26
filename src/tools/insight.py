@@ -1,4 +1,4 @@
-"""Insight tools: tags, workspace health stats, and the knowledge graph."""
+"""Insight tools: tags and the knowledge graph."""
 from __future__ import annotations
 
 from fastmcp import FastMCP
@@ -19,17 +19,6 @@ def register(mcp: FastMCP) -> None:
         if await data.get_membership_role(user.id, project_id) is None:
             return NOT_FOUND
         return {"tags": await data.list_tags(project_id)}
-
-    @mcp.tool(title="Workspace stats", annotations=_READ)
-    async def stats(project_id: str) -> dict:
-        """Health of a workspace: note count, resolved/unresolved links, orphan
-        notes (no link in or out) and distinct tag count."""
-        user = await resolve_user()
-        if user is None:
-            return UNAUTH
-        if await data.get_membership_role(user.id, project_id) is None:
-            return NOT_FOUND
-        return await data.project_stats(project_id)
 
     @mcp.tool(title="Knowledge graph", annotations=_READ)
     async def graph(project_id: str | None = None) -> dict:

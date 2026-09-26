@@ -1,5 +1,5 @@
-"""Workspace health tools: what needs attention, what's overdue for review, and
-marking a note reviewed.
+"""Workspace health tools: what needs attention (including what's overdue for
+review), and marking a note reviewed.
 
 Health is computed from what recall stores: edit dates, links, `status`, and
 each note's own `owner:`, `review_every:` and `reviewed:` frontmatter. The only
@@ -32,6 +32,11 @@ def register(mcp: FastMCP) -> None:
         - `owner_left`: `owner:` names someone who's no longer a member
 
         `counts` has the totals (lists are capped). Read-only.
+
+        To review overdue notes: check each one's content against reality. If
+        it's still right, call `mark_reviewed`; if not, fix it with
+        `update_note` (or propose the fix to the user first). Each entry has
+        its `type`, so a routine can take just the runbooks, say.
         """
         user = await resolve_user()
         if user is None:
@@ -42,25 +47,6 @@ def register(mcp: FastMCP) -> None:
         for key in _LISTS:
             with_note_urls(health[key])
         return health
-
-    @mcp.tool(title="Notes overdue for review", annotations=_READ)
-    async def stale_notes(project_id: str, type: str | None = None) -> dict:
-        """Notes past their review interval (their own `review_every:`
-        frontmatter, e.g. `6mo`), oldest due first, with owner, last `reviewed`
-        date, `due` date and `url`. Optionally only one note `type`.
-
-        For each one, check the content against reality. If it's still right,
-        call `mark_reviewed`; if not, fix it with `update_note` (or propose the
-        fix to the user first). Empty when no note sets `review_every`.
-        """
-        user = await resolve_user()
-        if user is None:
-            return UNAUTH
-        if await data.get_membership_role(user.id, project_id) is None:
-            return NOT_FOUND
-        health = await data.workspace_health(project_id)
-        notes = [n for n in health["overdue"] if type is None or n["type"] == type]
-        return {"notes": with_note_urls(notes), "total": len(notes)}
 
     @mcp.tool(title="Mark a note reviewed", annotations=_WRITE)
     async def mark_reviewed(note_id: str) -> dict:

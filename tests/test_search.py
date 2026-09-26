@@ -75,3 +75,29 @@ async def test_search_excludes_other_project_even_with_vector(
     ids = {r["id"] for r in await data.search_notes(x.id, "pangolin", vector(0), None, 20)}
     assert mine.id in ids
     assert theirs.id not in ids
+
+
+async def test_keyword_snippet_centres_on_the_match(make_user, make_project):
+    """A keyword hit's snippet shows the passage with the matched words, not
+    the note's opening, so the assistant can judge it without reading it."""
+    user = await make_user()
+    proj = await make_project(user)
+    filler = " ".join(f"word{i}" for i in range(120))
+    body = f"---\ntype: note\n---\n{filler}\n\nThe pangolin deploy failed at night.\n\n{filler}"
+    await data.create_note(proj.id, "Long", body, user.id)
+
+    [hit] = await data.search_notes(user.id, "pangolin", None, None, 20)
+    assert "pangolin deploy failed" in hit["snippet"]
+    assert hit["snippet"].startswith("…") and hit["snippet"].endswith("…")
+    assert "type: note" not in hit["snippet"]
+    assert len(hit["snippet"]) <= 302
+
+
+async def test_semantic_only_snippet_is_the_opening(make_user, make_project):
+    user = await make_user()
+    proj = await make_project(user)
+    note = await data.create_note(proj.id, "Sem", "---\ntags: [x]\n---\nOpening line here.", user.id)
+    await _set_embedding(note.id, vector(3))
+
+    [hit] = await data.search_notes(user.id, "zzzunmatched", vector(3), None, 20)
+    assert hit["snippet"] == "Opening line here."

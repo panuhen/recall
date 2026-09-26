@@ -18,7 +18,10 @@ def register(mcp: FastMCP) -> None:
         """Hybrid keyword + semantic search across every note you can access.
 
         Fuses full-text and vector similarity (RRF) with a light recency tie-break.
-        Returns ranked notes with a snippet — call `read_note` for a full body.
+        Returns ranked notes with a snippet: the passage around the matched
+        words for a keyword hit, the note's opening for a meaning-only hit.
+        Check the snippet before calling `read_note` for a full body. For an
+        exact string (a name, error code, path or quote), use `grep`.
 
         Args:
             query: What to look for. Natural language works (it's embedded).
@@ -37,6 +40,37 @@ def register(mcp: FastMCP) -> None:
         qvec = await embed_query(q)
         results = await data.search_notes(user.id, q, qvec, project_id, limit)
         return {"results": with_note_urls(results), "semantic": qvec is not None}
+
+    @mcp.tool(title="Find exact text", annotations=_READ)
+    async def grep(text: str, project_id: str | None = None, limit: int = 20) -> dict:
+        """Find notes containing `text` exactly: case-insensitive and literal
+        (not a regex, no stemming), across every note you can access. Use it
+        for names, error codes, file paths, URLs and quotes; use `search` for
+        questions about meaning.
+
+        Each result has an `excerpt` of the matching lines in `grep -n -C1`
+        format (`12:` a matching line, `11-` context, `--` between groups; line
+        numbers count from the top of the note, frontmatter included), up to 5
+        matching lines per note, plus `match_count` for the whole note and
+        `title_match`. Most recently edited notes first. Often the excerpt is
+        enough; call `read_note` only when you need more.
+
+        Args:
+            text: The exact text to find, at least 2 characters.
+            project_id: Optional — scope to a single workspace.
+            limit: Max notes, 1–50 (default 20).
+        """
+        user = await resolve_user()
+        if user is None:
+            return UNAUTH
+        t = (text or "").strip()
+        if len(t) < 2:
+            return {"error": "text_too_short", "results": []}
+        if project_id and await data.get_membership_role(user.id, project_id) is None:
+            return NOT_FOUND
+        limit = max(1, min(int(limit or 20), 50))
+        results = await data.grep_notes(user.id, t[:200], project_id, limit)
+        return {"results": with_note_urls(results)}
 
     @mcp.tool(title="Query notes by metadata", annotations=_READ)
     async def query_notes(

@@ -445,3 +445,40 @@ def mention_link_text(title: str, mention: Mention, body: str) -> str:
     if body[line_start:mention.start].lstrip().startswith("|"):
         return f"[[{title}]]"
     return f"[[{title}|{mention.text}]]"
+
+
+def grep_excerpt(
+    body: str, needle: str, *, context: int = 1, max_matches: int = 5, width: int = 200
+) -> tuple[str, int]:
+    """Grep-style excerpt of the lines in `body` containing `needle`
+    (case-insensitive, literal), with `context` lines around each, numbered
+    from 1 over the whole body including frontmatter. Uses grep -n -C's own
+    format: `12:` marks a matching line, `11-` a context line, `--` separates
+    groups. Only the first `max_matches` matching lines are shown; a line
+    longer than `width` is cut around the match. Returns (excerpt, number of
+    matching lines in the whole body)."""
+    lines = body.splitlines()
+    key = needle.lower()
+    hits = [i for i, line in enumerate(lines) if key in line.lower()]
+    shown = hits[:max_matches]
+    keep: dict[int, bool] = {}
+    for i in shown:
+        for j in range(max(0, i - context), min(len(lines), i + context + 1)):
+            keep[j] = keep.get(j, False) or j == i
+    out: list[str] = []
+    prev = None
+    for j in sorted(keep):
+        if prev is not None and j != prev + 1:
+            out.append("--")
+        out.append(f"{j + 1}{':' if keep[j] else '-'}{_cut_line(lines[j], key, width)}")
+        prev = j
+    return "\n".join(out), len(hits)
+
+
+def _cut_line(line: str, key: str, width: int) -> str:
+    """`line`, or a `width`-character window of it around `key` with ellipses."""
+    if len(line) <= width:
+        return line
+    at = max(0, line.lower().find(key))
+    a = max(0, min(at - (width - len(key)) // 2, len(line) - width))
+    return ("…" if a > 0 else "") + line[a : a + width] + ("…" if a + width < len(line) else "")

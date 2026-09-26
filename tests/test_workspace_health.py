@@ -561,15 +561,13 @@ async def test_mcp_health_tools(tools, make_user, make_project, add_member):
     assert [n["id"] for n in health["overdue"]] == [rb.id]
     assert health["overdue"][0]["url"] == f"{APP}/notes/{rb.id}"
     assert [n["id"] for n in health["not_edited"]] == [dec.id]
-    stale = await (await get("stale_notes"))(proj.id, type="runbook")
-    assert stale["total"] == 1 and stale["notes"][0]["url"].endswith(rb.id)
-    assert (await (await get("stale_notes"))(proj.id, type="decision"))["total"] == 0
+    assert health["overdue"][0]["type"] == "runbook"
     assert await (await get("mark_reviewed"))(rb.id) == {"error": "forbidden"}
 
     as_user(owner)
     res = await (await get("mark_reviewed"))(rb.id)
     assert res["reviewed"] == date.today().isoformat() and res["review"]["overdue"] is False
-    assert (await (await get("stale_notes"))(proj.id))["total"] == 0
+    assert (await (await get("workspace_health"))(proj.id))["overdue"] == []
 
     outsider = await make_user()
     as_user(outsider)

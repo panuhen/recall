@@ -19,6 +19,7 @@ from .markdown import (
     MentionMatcher,
     extract_wikilinks,
     frontmatter_problem,
+    grep_excerpt,
     mention_link_text,
     mention_snippet,
     mention_terms,
@@ -2089,6 +2090,7 @@ fused AS (
 )
 SELECT n.id, n.title, n.slug, n.project_id, p.name AS project_name,
        n.folder_id, n.body, n.updated_at,
+       EXISTS (SELECT 1 FROM kw WHERE kw.id = f.id) AS kw_hit,
        f.score * (1 + 0.1 / (1 + EXTRACT(EPOCH FROM (now() - n.updated_at)) / 86400 / 365))
            AS score
 FROM fused f
@@ -2097,6 +2099,38 @@ JOIN projects p ON p.id = n.project_id
 ORDER BY score DESC
 LIMIT $5
 """
+
+
+# Search snippets: for a keyword hit, the passage around the matched words
+# (Postgres ts_headline, which knows the same stemming as the match); for a
+# semantic-only hit there are no matched words, so the note's opening. Either
+# way the assistant can often tell from the snippet whether to read the note.
+_SNIPPET_MAX = 300
+_HEADLINE_OPTS = (
+    'MaxFragments=2, MinWords=8, MaxWords=25, StartSel="", StopSel="", '
+    'FragmentDelimiter=" … "'
+)
+
+
+async def _headlines(pool, query: str, contents: list[str]) -> list[str]:
+    """ts_headline for each of `contents` (frontmatter already stripped), in
+    order, in one round trip."""
+    if not contents:
+        return []
+    rows = await pool.fetch(
+        "SELECT ts_headline('english', c, websearch_to_tsquery('english', $2), $3) AS h "
+        "FROM unnest($1::text[]) WITH ORDINALITY AS t(c, i) ORDER BY i",
+        contents, query, _HEADLINE_OPTS,
+    )
+    return [r["h"] for r in rows]
+
+
+def _headline_snippet(content: str, headline: str) -> str:
+    """Whitespace-collapsed headline, capped, with an ellipsis on each end
+    where it doesn't reach the start or end of the note."""
+    text = " ".join(headline.split())[:_SNIPPET_MAX]
+    whole = " ".join(content.split())
+    return ("" if whole.startswith(text) else "…") + text + ("" if whole.endswith(text) else "…")
 
 
 async def search_notes(
@@ -2116,10 +2150,16 @@ async def search_notes(
         project_id,
         limit,
     )
+    contents = [parse_frontmatter(r["body"])[1] for r in rows]
+    headlines = await _headlines(
+        pool, query, [c for r, c in zip(rows, contents) if r["kw_hit"]]
+    )
     results = []
-    for r in rows:
-        _, content = parse_frontmatter(r["body"])
-        snippet = " ".join(content.split())[:200]
+    for r, content in zip(rows, contents):
+        snippet = (
+            _headline_snippet(content, headlines.pop(0)) if r["kw_hit"]
+            else " ".join(content.split())[:_SNIPPET_MAX]
+        )
         results.append(
             {
                 "id": str(r["id"]),
@@ -2133,6 +2173,50 @@ async def search_notes(
                 "score": float(r["score"]),
             }
         )
+    return results
+
+
+async def grep_notes(
+    user_id: str, text: str, project_id: str | None, limit: int
+) -> list[dict]:
+    """Notes the caller can read whose title or body contains `text`
+    (case-insensitive, literal substring), most recently edited first, each
+    with a grep-style excerpt of the matching lines (see grep_excerpt)."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        WITH me AS (
+            SELECT project_id FROM project_members WHERE user_id = $1::uuid
+            UNION
+            SELECT id FROM projects WHERE org_access = 'viewer' AND archived_at IS NULL
+        )
+        SELECT n.id, n.title, n.slug, n.project_id, p.name AS project_name,
+               n.body, n.updated_at
+        FROM notes n
+        JOIN projects p ON p.id = n.project_id
+        WHERE n.project_id IN (SELECT project_id FROM me)
+          AND ($3::uuid IS NULL OR n.project_id = $3::uuid)
+          AND n.archived_at IS NULL
+          AND (strpos(lower(n.body), lower($2)) > 0 OR strpos(lower(n.title), lower($2)) > 0)
+        ORDER BY n.updated_at DESC
+        LIMIT $4
+        """,
+        user_id, text, project_id, limit,
+    )
+    results = []
+    for r in rows:
+        excerpt, count = grep_excerpt(r["body"], text)
+        results.append({
+            "id": str(r["id"]),
+            "title": r["title"],
+            "slug": r["slug"],
+            "project_id": str(r["project_id"]),
+            "project_name": r["project_name"],
+            "title_match": text.lower() in r["title"].lower(),
+            "match_count": count,
+            "excerpt": excerpt,
+            "updated_at": r["updated_at"].isoformat(),
+        })
     return results
 
 
@@ -2301,44 +2385,6 @@ async def list_tags(project_id: str) -> list[dict]:
         project_id,
     )
     return [{"tag": r["tag"], "count": int(r["count"])} for r in rows]
-
-
-async def project_stats(project_id: str) -> dict:
-    """Health counts for a project: live notes, resolved links, unresolved
-    links, orphan notes (no resolved link in or out), and distinct tags."""
-    pool = await get_pool()
-    row = await pool.fetchrow(
-        """
-        WITH live AS (
-            SELECT id FROM notes WHERE project_id = $1::uuid AND archived_at IS NULL
-        ),
-        resolved AS (
-            SELECT l.source_note_id AS s, l.target_note_id AS t
-            FROM note_links l
-            JOIN live sn ON sn.id = l.source_note_id
-            JOIN live tn ON tn.id = l.target_note_id
-        )
-        SELECT
-            (SELECT COUNT(*) FROM live) AS notes,
-            (SELECT COUNT(*) FROM resolved) AS links,
-            (SELECT COUNT(*) FROM note_links l
-                JOIN live sn ON sn.id = l.source_note_id
-                WHERE l.target_note_id IS NULL) AS unresolved_links,
-            (SELECT COUNT(*) FROM live
-                WHERE id NOT IN (SELECT s FROM resolved)
-                  AND id NOT IN (SELECT t FROM resolved)) AS orphans,
-            (SELECT COUNT(DISTINCT tag) FROM notes n, unnest(n.tags) AS tag
-                WHERE n.project_id = $1::uuid AND n.archived_at IS NULL) AS tags
-        """,
-        project_id,
-    )
-    return {
-        "notes": int(row["notes"]),
-        "links": int(row["links"]),
-        "unresolved_links": int(row["unresolved_links"]),
-        "orphans": int(row["orphans"]),
-        "tags": int(row["tags"]),
-    }
 
 
 # ── Export ──────────────────────────────────────────────────
