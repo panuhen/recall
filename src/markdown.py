@@ -13,7 +13,6 @@ from typing import Any
 import yaml
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
-_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 # Inline code span (CommonMark-ish, single line: no DOTALL) OR a wikilink.
 # The span alternative wins when a `[[link]]` sits inside backticks, so both
 # extract and rewrite treat it as example text, not a link. Group 1 = backtick
@@ -87,19 +86,34 @@ def _iter_code_fence_segments(body: str):
 def extract_wikilinks(body: str) -> list[str]:
     """Unique `[[Target]]` titles (drops `|alias` and `#heading`).
 
-    Deliberately indexes EVERY wikilink, including ones inside code fences or
-    backtick spans. This is the source of truth for `note_links` edges via
-    _sync_links (delete-all-then-reinsert on each write), so the only safe
-    failure direction is over-indexing: an extra backlink from a code example
-    is harmless, whereas a scanner that mistook real prose for code would make
-    the next save silently DROP live edges. Link-text *rewriting*
-    (rewrite_wikilink_target) is code-aware — that's cosmetic and safe to get
-    slightly wrong — but edge *indexing* stays blunt and lossless."""
+    Skips wikilinks inside fenced code blocks and inline code spans, as Obsidian
+    does: a `[[link]]` in a code example is documentation, not a reference. This
+    is the source of truth for `note_links` edges via _sync_links, and it uses
+    the same scanner as rewrite_wikilink_target, so indexing and rename
+    rewriting agree on what counts as a link. (When they disagreed, a rename
+    left code examples alone but still indexed them, and they showed up as
+    broken links in workspace health.)
+
+    The scanner is line-based and approximates CommonMark. An unclosed fence
+    makes the rest of the note code, which is also how Obsidian reads it; an
+    inline span only matches within one line, so a span broken across lines is
+    still indexed (the harmless direction). Links in the YAML frontmatter are
+    indexed, like any prose."""
+    fm, rest = "", body
+    fm_match = _FRONTMATTER_RE.match(body)
+    if fm_match:
+        fm, rest = body[: fm_match.end()], body[fm_match.end() :]
+    prose = [fm] + [text for text, in_fence in _iter_code_fence_segments(rest) if not in_fence]
+
     seen: dict[str, str] = {}
-    for raw in _WIKILINK_RE.findall(body):
-        title = raw.split("|", 1)[0].split("#", 1)[0].strip()
-        if title:
-            seen.setdefault(title.lower(), title)
+    for text in prose:
+        for m in _CODE_OR_WIKILINK_RE.finditer(text):
+            raw = m.group(2)
+            if raw is None:  # inline code span
+                continue
+            title = raw.split("|", 1)[0].split("#", 1)[0].strip()
+            if title:
+                seen.setdefault(title.lower(), title)
     return list(seen.values())
 
 
@@ -125,11 +139,8 @@ def rewrite_wikilink_target(body: str, old_title: str, new_title: str) -> tuple[
 
     Wikilinks inside fenced code blocks or inline code spans are left
     byte-for-byte intact — a `[[link]]` in a code example is documentation, not
-    a reference to rewrite. This is best-effort and independent of
-    extract_wikilinks (which indexes everything): the code-fence/span scanner
-    approximates CommonMark, so on pathological input the worst case is a link
-    whose text isn't refreshed on rename (cosmetic — the edge still resolves by
-    the immutable slug), never a lost edge.
+    a reference to rewrite. extract_wikilinks skips the same regions, so a link
+    this leaves alone is also not indexed as an edge.
 
     The YAML frontmatter region is rewritten too (its links rot like any other)
     but only kept when the result still parses to a mapping: a title like

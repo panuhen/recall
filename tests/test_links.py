@@ -9,7 +9,10 @@ unsafe and colliding new titles skip the cascade, frontmatter is only rewritten
 when the YAML survives, self-links and dangling claims."""
 from __future__ import annotations
 
-from src import data
+from alembic import command
+from alembic.config import Config
+
+from src import data, state
 from src.markdown import extract_wikilinks, rewrite_wikilink_target
 
 
@@ -86,20 +89,38 @@ def test_rewrite_wikilink_target_pure():
     assert out == "x [[Baz]] y [[Baz|bar]] z [[Baz#h]] and [[other]]"
 
 
-def test_extract_indexes_all_wikilinks_including_code():
-    """extract_wikilinks is deliberately blunt: it indexes EVERY [[link]],
-    including inside code fences/spans. Over-indexing a code example is a
-    harmless extra edge; the alternative (a scanner that mistakes prose for
-    code) would make _sync_links silently drop live edges on the next save."""
+def test_extract_skips_wikilinks_in_code():
+    """A [[link]] inside a code fence or backtick span is example text, as in
+    Obsidian: it isn't indexed as an edge, so it can't show up as a broken
+    link. Prose and frontmatter links still count."""
     body = (
+        "---\n"
+        "related: '[[Frontmatter]]'\n"
+        "---\n"
         "real [[Target]]\n"
         "```python\n"
         "code [[Fenced]] here\n"
         "```\n"
-        "inline `[[Spanned]]` too\n"
+        "~~~\n"
+        "[[Tilde]]\n"
+        "~~~\n"
+        "inline `[[Spanned]]` too, and ``[[Double]]`` and [[After|alias]]\n"
     )
-    # Every distinct title is indexed — none dropped by code context.
-    assert set(extract_wikilinks(body)) == {"Target", "Fenced", "Spanned"}
+    assert set(extract_wikilinks(body)) == {"Frontmatter", "Target", "After"}
+
+
+def test_extract_unclosed_fence_hides_the_rest():
+    """An unclosed fence runs to the end of the note, the same as Obsidian."""
+    body = "before [[A]]\n```\n[[B]]\nstill code [[C]]\n"
+    assert extract_wikilinks(body) == ["A"]
+
+
+def test_extract_and_rewrite_agree_on_code():
+    """Whatever rename rewriting leaves alone, indexing skips too."""
+    body = "[[Old]] `[[Old]]`\n```\n[[Old]]\n```\n"
+    out, n = rewrite_wikilink_target(body, "Old", "New")
+    assert n == 1
+    assert extract_wikilinks(out) == ["New"]
 
 
 def test_rewrite_leaves_code_wikilinks_intact():
@@ -461,3 +482,43 @@ async def test_rename_cascade_snapshots_and_attributes_linker(
     assert revs, "cascade must leave a prior-body snapshot on the linker"
     prior = await data.get_revision(linker.id, revs[0]["id"])
     assert prior["body"] == "prior body [[Old]]"  # captured before the rewrite
+
+
+async def test_code_link_is_not_an_edge(make_user, make_project):
+    """Saving a note indexes only its prose links, so a code example can't
+    appear as a backlink or a broken link."""
+    user = await make_user()
+    proj = await make_project(user)
+    target = await data.create_note(proj.id, "Target", "t", user.id)
+    await data.create_note(proj.id, "Source", "`[[Target]]` and `[[Missing]]`", user.id)
+    assert await data.get_backlinks(target.id) == []
+    pool = await state.get_pool()
+    assert await pool.fetchval("SELECT count(*) FROM note_links") == 0
+
+
+async def test_migration_010_prunes_stored_code_links(make_user, make_project):
+    """Edges indexed from code under the old parser are removed on upgrade;
+    prose edges stay."""
+    user = await make_user()
+    proj = await make_project(user)
+    await data.create_note(proj.id, "Target", "t", user.id)
+    source = await data.create_note(
+        proj.id, "Source", "[[Target]]\n```\n[[Fenced]]\n```\n`[[Spanned]]`\n", user.id
+    )
+    pool = await state.get_pool()
+    # What the old parser stored for this body.
+    await pool.execute(
+        "INSERT INTO note_links (source_note_id, target_note_id, target_title) "
+        "VALUES ($1::uuid, NULL, 'Fenced'), ($1::uuid, NULL, 'Spanned')",
+        source.id,
+    )
+    await state.close_pool()
+    cfg = Config("alembic.ini")
+    command.downgrade(cfg, "009")
+    command.upgrade(cfg, "head")
+
+    pool = await state.get_pool()
+    titles = await pool.fetch(
+        "SELECT target_title FROM note_links WHERE source_note_id = $1::uuid", source.id
+    )
+    assert [r["target_title"] for r in titles] == ["Target"]

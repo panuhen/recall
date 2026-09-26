@@ -240,6 +240,9 @@ export function wikilinkNav(navigate: (target: string) => void) {
 function build(view: EditorView): DecorationSet {
   const { state } = view;
   const decos: Range<Decoration>[] = [];
+  // Wikilinks inside code are example text, as in Obsidian and the backend
+  // index: collected here so the wikilink pass below skips them.
+  const code: { from: number; to: number }[] = [];
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -247,6 +250,8 @@ function build(view: EditorView): DecorationSet {
       to,
       enter: (node) => {
         const name = node.name;
+        if (name === "FencedCode" || name === "CodeBlock" || name === "InlineCode")
+          code.push({ from: node.from, to: node.to });
 
         // Tables are rendered by a block widget (tableRender state field); skip
         // their internals here so decorations don't overlap the replacement.
@@ -431,6 +436,7 @@ function build(view: EditorView): DecorationSet {
     while ((m = WIKILINK.exec(text)) !== null) {
       const s = from + m.index;
       const e = s + m[0].length;
+      if (code.some((c) => s >= c.from && e <= c.to)) continue;
       decos.push(Decoration.mark({ class: "cm-lp-wikilink" }).range(s, e));
       if (!touches(state, s, e)) {
         decos.push(Decoration.replace({}).range(s, s + 2));

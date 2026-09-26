@@ -6,6 +6,8 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
 
+import { replaceProseWikilinks } from "@/lib/wikilinks";
+
 import { MermaidDiagram } from "./mermaid-diagram";
 
 type RehypePlugins = NonNullable<MarkdownOptions["rehypePlugins"]>;
@@ -27,10 +29,9 @@ const HIGHLIGHT_PLUGIN: RehypePlugins[number] = [
 // Frontmatter is surfaced in the Properties panel, not the rendered body.
 const FRONTMATTER = /^---\n[\s\S]*?\n---\n?/;
 // Obsidian wikilinks aren't standard markdown; render them as styled text.
-const WIKILINK = /\[\[([^\]\n]+)\]\]/g;
-
+// Ones inside code stay literal, as in Obsidian.
 function preprocess(body: string): string {
-  return body.replace(FRONTMATTER, "").replace(WIKILINK, (_m, inner: string) => {
+  return replaceProseWikilinks(body.replace(FRONTMATTER, ""), (inner) => {
     const [target, alias] = inner.split("|");
     const label = (alias ?? target).trim();
     return `[${label}](wikilink:${encodeURIComponent(target.trim())})`;
