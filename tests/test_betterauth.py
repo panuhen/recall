@@ -222,6 +222,48 @@ async def test_unknown_user_is_rejected_uncached(ba_user_table):
     assert len(ba.calls) == 2
 
 
+# ── access list (BETTER_AUTH_ACCESS / BETTER_AUTH_ALLOWED_EMAILS) ──
+
+
+async def test_token_of_user_off_the_access_list_is_rejected(ba_user_table):
+    # ada@example.com signed up while listed, then was removed from the list.
+    ba = FakeBetterAuth(body=_session())
+    v = ba.verifier(allowed=["john@example.com"])
+    assert await v.verify_token("tok") is None
+    assert await v.verify_token("tok") is None
+    assert len(ba.calls) == 1  # the refusal is cached
+
+
+async def test_token_of_listed_user_passes(ba_user_table):
+    ba = FakeBetterAuth(body=_session())
+    assert await ba.verifier(allowed=["@example.com"]).verify_token("tok") is not None
+    assert await ba.verifier(allowed=["ada@example.com"]).verify_token("tok") is not None
+
+
+def test_may_access_matches_addresses_and_domains():
+    allowed = ["owner@example.com", "@example.org"]
+    assert auth.may_access(None, "anyone@example.net")
+    assert auth.may_access(allowed, " Owner@Example.com ")
+    assert auth.may_access(allowed, "someone@example.org")
+    assert not auth.may_access(allowed, "other@example.com")
+    # A suffix match needs the @: "evilexample.org" is not in @example.org.
+    assert not auth.may_access(allowed, "x@evilexample.org")
+
+
+def test_parse_access_allowlist():
+    parse = config.parse_access_allowlist
+    assert parse(None, None, None) is None
+    assert parse("open", None, "a@b.c") is None
+    assert parse("closed", None, " A@B.c , @example.org ,") == ["a@b.c", "@example.org"]
+    # The old name still works; the new one wins when both are set.
+    assert parse(None, "closed", "a@b.c") == ["a@b.c"]
+    assert parse("open", "closed", "a@b.c") is None
+    with pytest.raises(ValueError, match="BETTER_AUTH_ALLOWED_EMAILS"):
+        parse("closed", None, " , ")
+    with pytest.raises(ValueError, match="BETTER_AUTH_ACCESS"):
+        parse("invite", None, "a@b.c")
+
+
 # ── build_mcp_auth mode selection + metadata ────────────────
 
 
@@ -239,6 +281,13 @@ def test_build_mcp_auth_betterauth(monkeypatch):
     assert isinstance(provider, RemoteAuthProvider)
     assert isinstance(provider.token_verifier, auth.BetterAuthTokenVerifier)
     assert provider.token_verifier.session_url == SESSION_URL
+    assert provider.token_verifier.allowed is None
+
+
+def test_build_mcp_auth_betterauth_passes_the_access_list(monkeypatch):
+    _betterauth_env(monkeypatch)
+    monkeypatch.setattr(config, "BETTER_AUTH_ALLOWED", ["john@example.com"])
+    assert auth.build_mcp_auth().token_verifier.allowed == ["john@example.com"]
 
 
 def test_build_mcp_auth_betterauth_without_url_is_open(monkeypatch):

@@ -87,16 +87,16 @@ to scope them to.
 
 ### Better Auth setup (`AUTH_MODE=betterauth`)
 
-It runs on two public hosts: the web app (for example `https://recall.rapu.ai`), which
+It runs on two public hosts: the web app (for example `https://recall.example.com`), which
 is also the OAuth issuer, and the backend's MCP endpoint (for example
-`https://recall-mcp.rapu.ai`). MCP clients connect to `https://recall-mcp.rapu.ai/mcp`,
+`https://recall-mcp.example.com`). MCP clients connect to `https://recall-mcp.example.com/mcp`,
 get a `401` pointing at its protected-resource metadata, and from there find Better
 Auth on the web host to register and sign in.
 
 1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create
    an OAuth client ID of type *Web application*. Add the authorized redirect URI
    `{BETTER_AUTH_URL}/api/auth/callback/google`, e.g.
-   `https://recall.rapu.ai/api/auth/callback/google` (or
+   `https://recall.example.com/api/auth/callback/google` (or
    `http://localhost:3000/api/auth/callback/google` locally).
 2. Set in `.env` (see the Better Auth block in `.env.example`):
    - `AUTH_MODE=betterauth`
@@ -108,11 +108,14 @@ Auth on the web host to register and sign in.
      tokens (`http://web:3000` in compose; defaults to `BETTER_AUTH_URL`).
    - `MCP_PUBLIC_URL`: the MCP host, and add that host to `MCP_ALLOWED_HOSTS`.
    - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` from step 1.
-   - `BETTER_AUTH_SIGNUP`: `open` (default) lets any Google account register; `closed`
+   - `BETTER_AUTH_ACCESS`: `open` (default) lets any Google account in; `closed`
      admits only `BETTER_AUTH_ALLOWED_EMAILS`, a comma-separated list of addresses or
-     `@domain` suffixes. The gate applies when an account is first created, so existing
-     users keep signing in. A blocked sign-up lands back on `/sign-in` with a
-     "Registration is closed" message.
+     `@domain` suffixes. The list is checked at sign-up, at every sign-in, on every web
+     request and (in the backend) on every MCP token, so removing an address and
+     restarting both services locks that person out within a minute; their notes and
+     memberships stay. `closed` with an empty list refuses to start. A refused sign-in
+     lands back on `/sign-in` with an "invite-only" message. Set both variables on the
+     web app and the backend. `BETTER_AUTH_SIGNUP` is the old name and still works.
 3. The web app needs `DATABASE_URL` too. At startup it creates its own `ba_*` tables
    (`ba_user`, `ba_session`, `ba_oauth_application`, …) in recall's database, and exits
    if that fails.

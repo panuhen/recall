@@ -8,7 +8,10 @@ const searchDirectory = vi.fn(async (_q: string) => [
 vi.mock("@/lib/graph", () => ({ searchDirectory }));
 
 const getSession = vi.fn();
-vi.mock("@/lib/betterauth", () => ({
+const accessPolicy = { open: true, allowed: [] as string[] };
+vi.mock("@/lib/betterauth", async (orig) => ({
+  mayAccess: (await orig<typeof import("@/lib/betterauth")>()).mayAccess,
+  currentAccessPolicy: () => accessPolicy,
   getAuth: () => ({ api: { getSession } }),
 }));
 

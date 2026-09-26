@@ -80,7 +80,7 @@ function GoogleButton({ enabled }: { enabled: boolean }) {
       {(error || params.get("error")) && (
         <p className="mt-3 max-w-xs text-center text-sm text-destructive" role="alert">
           {params.get("error") === "signup_disabled"
-            ? "Registration is closed. Ask the owner of this re:call to add your email."
+            ? "This re:call is invite-only. Ask its owner to add your email."
             : "Sign-in failed. Try again."}
         </p>
       )}

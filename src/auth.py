@@ -178,12 +178,14 @@ class BetterAuthTokenVerifier(TokenVerifier):
         self,
         *,
         internal_url: str,
+        allowed: list[str] | None = None,
         cache_ttl: int = 60,
         cache_max: int = _BA_CACHE_MAX,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         super().__init__()
         self.session_url = f"{internal_url.rstrip('/')}/api/auth/mcp/get-session"
+        self.allowed = allowed  # config.BETTER_AUTH_ALLOWED: None = open
         self.cache_ttl = cache_ttl
         self.cache_max = cache_max
         self._transport = transport  # tests inject an httpx.MockTransport
@@ -261,6 +263,12 @@ class BetterAuthTokenVerifier(TokenVerifier):
             # Token outlived its user row; not cached, it costs one lookup.
             log.warning("Better Auth token for unknown user %s", user_id)
             return None
+        if not may_access(self.allowed, user["email"] or ""):
+            # Address removed from BETTER_AUTH_ALLOWED_EMAILS: the token is
+            # still live in Better Auth, but this user no longer gets in.
+            log.info("Better Auth token refused: %s is not on the access list", user_id)
+            self._reject(token)
+            return None
 
         expires_at = _epoch(session.get("accessTokenExpiresAt"))
         scope = session.get("scopes") or ""
@@ -285,6 +293,15 @@ class BetterAuthTokenVerifier(TokenVerifier):
         if ttl > 0:
             self._put(self._valid, token, (time.monotonic() + ttl, access))
         return access
+
+
+def may_access(allowed: list[str] | None, email: str) -> bool:
+    """Whether `email` is on the betterauth access list (None = open). Entries
+    are addresses or "@domain" suffixes; mirrors mayAccess() in the web app."""
+    if allowed is None:
+        return True
+    e = email.strip().lower()
+    return any(e.endswith(a) if a.startswith("@") else e == a for a in allowed)
 
 
 def _epoch(value) -> Optional[int]:
@@ -354,6 +371,7 @@ def _build_betterauth_auth():
     try:
         verifier = BetterAuthTokenVerifier(
             internal_url=config.BETTER_AUTH_INTERNAL_URL or config.BETTER_AUTH_URL,
+            allowed=config.BETTER_AUTH_ALLOWED,
             cache_ttl=config.BETTER_AUTH_TOKEN_CACHE_TTL,
         )
         provider = BetterAuthProvider(

@@ -370,7 +370,7 @@ function InviteComposer({
               void invite();
             }
           }}
-          placeholder="Name or name@company.com"
+          placeholder="Name or name@example.com"
           className="h-9 w-full rounded-md border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-primary"
         />
         {showHits && hits.length > 0 && (

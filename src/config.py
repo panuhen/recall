@@ -100,6 +100,44 @@ BETTER_AUTH_INTERNAL_URL = (
 # Seconds a get-session verdict (valid or rejected) is cached per token.
 BETTER_AUTH_TOKEN_CACHE_TTL = int(os.environ.get("BETTER_AUTH_TOKEN_CACHE_TTL", "60"))
 
+
+def parse_access_allowlist(
+    access: str | None, legacy: str | None, emails: str | None
+) -> list[str] | None:
+    """Who may use recall in betterauth mode: None when open, else the
+    lower-cased BETTER_AUTH_ALLOWED_EMAILS entries (addresses or "@domain").
+
+    Mirrors accessPolicy() in web/src/lib/betterauth.ts, which enforces the same
+    list at sign-in; this side enforces it on MCP tokens. BETTER_AUTH_SIGNUP is
+    the old name of BETTER_AUTH_ACCESS. ``ValueError`` on an unknown mode, or on
+    closed with an empty list (it would lock everyone out)."""
+    name, raw = "BETTER_AUTH_ACCESS", access
+    if raw is None and legacy is not None:
+        name, raw = "BETTER_AUTH_SIGNUP", legacy
+    mode = (raw or "open").strip().lower() or "open"
+    if mode not in ("open", "closed"):
+        raise ValueError(f'{name} must be "open" or "closed", got {raw!r}')
+    if mode == "open":
+        return None
+    allowed = [e.strip().lower() for e in (emails or "").split(",") if e.strip()]
+    if not allowed:
+        raise ValueError(
+            f"{name}=closed needs BETTER_AUTH_ALLOWED_EMAILS; an empty list admits nobody"
+        )
+    return allowed
+
+
+# Validated at import in betterauth mode, like the embedding settings below.
+BETTER_AUTH_ALLOWED = (
+    parse_access_allowlist(
+        os.environ.get("BETTER_AUTH_ACCESS"),
+        os.environ.get("BETTER_AUTH_SIGNUP"),
+        os.environ.get("BETTER_AUTH_ALLOWED_EMAILS"),
+    )
+    if AUTH_MODE == "betterauth"
+    else None
+)
+
 # ── Trash / retention ───────────────────────────────────────
 # Deletes are soft (archived_at). Items stay in Trash and are restorable until
 # either the user purges them or auto-purge removes them. TRASH_RETENTION_DAYS

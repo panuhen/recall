@@ -64,9 +64,12 @@ export async function getSessionUser(
   req: NextRequest,
 ): Promise<SessionUser | null> {
   if (AUTH_MODE === "betterauth") {
-    const { getAuth } = await import("@/lib/betterauth");
+    const { currentAccessPolicy, getAuth, mayAccess } = await import("@/lib/betterauth");
     const session = await getAuth().api.getSession({ headers: req.headers });
     if (!session) return null;
+    // A session outlives its address being removed from the access list;
+    // refuse it here so the removal takes effect without waiting for expiry.
+    if (!mayAccess(currentAccessPolicy(), session.user.email)) return null;
     return {
       oid: session.user.id,
       upn: session.user.email.toLowerCase(),

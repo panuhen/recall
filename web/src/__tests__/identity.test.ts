@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { req, withMode } from "./helpers";
 
 const getSession = vi.fn();
-vi.mock("@/lib/betterauth", () => ({
+let accessPolicy = { open: true, allowed: [] as string[] };
+vi.mock("@/lib/betterauth", async (orig) => ({
+  mayAccess: (await orig<typeof import("@/lib/betterauth")>()).mayAccess,
+  currentAccessPolicy: () => accessPolicy,
   getAuth: () => ({ api: { getSession } }),
 }));
 
@@ -60,6 +63,22 @@ describe("resolveIdentity", () => {
       name: "Grace Hopper",
     });
     expect(getSession).toHaveBeenLastCalledWith({ headers: r.headers });
+  });
+
+  it("refuses a Better Auth session whose email left the access list", async () => {
+    const { resolveIdentity } = await withMode("betterauth", () => import("@/lib/identity"));
+    accessPolicy = { open: false, allowed: ["john@example.com"] };
+    const session = (email: string) => ({ user: { id: "u", email, name: "N" }, session: {} });
+    try {
+      getSession.mockResolvedValueOnce(session("John@Example.com"));
+      expect(await resolveIdentity(req("/api/me", "better-auth.session_token=a"))).toMatchObject({
+        upn: "john@example.com",
+      });
+      getSession.mockResolvedValueOnce(session("bob@example.com"));
+      expect(await resolveIdentity(req("/api/me", "better-auth.session_token=b"))).toBeNull();
+    } finally {
+      accessPolicy = { open: true, allowed: [] };
+    }
   });
 
   it("identityHeaders carries the X-User-* contract", async () => {

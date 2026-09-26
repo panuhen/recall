@@ -107,47 +107,94 @@ describe("Better Auth instance", () => {
   });
 });
 
-describe("sign-up policy", () => {
+describe("access policy", () => {
   it("defaults to open", async () => {
-    const { signupPolicy, maySignUp } = await fresh();
-    const policy = signupPolicy({});
+    const { accessPolicy, mayAccess } = await fresh();
+    const policy = accessPolicy({});
     expect(policy.open).toBe(true);
-    expect(maySignUp(policy, "anyone@example.com")).toBe(true);
+    expect(mayAccess(policy, "anyone@example.com")).toBe(true);
   });
 
   it("closed admits only listed addresses and @domain suffixes", async () => {
-    const { signupPolicy, maySignUp } = await fresh();
-    const policy = signupPolicy({
-      BETTER_AUTH_SIGNUP: "closed",
-      BETTER_AUTH_ALLOWED_EMAILS: " Owner@Example.com , @rapu.ai ,",
+    const { accessPolicy, mayAccess } = await fresh();
+    const policy = accessPolicy({
+      BETTER_AUTH_ACCESS: "closed",
+      BETTER_AUTH_ALLOWED_EMAILS: " Owner@Example.com , @example.org ,",
     });
-    expect(maySignUp(policy, "owner@example.com")).toBe(true);
-    expect(maySignUp(policy, "OWNER@example.com")).toBe(true);
-    expect(maySignUp(policy, "someone@rapu.ai")).toBe(true);
-    expect(maySignUp(policy, "other@example.com")).toBe(false);
-    // A suffix match needs the @: "evilrapu.ai" is not in @rapu.ai.
-    expect(maySignUp(policy, "x@evilrapu.ai")).toBe(false);
+    expect(mayAccess(policy, "owner@example.com")).toBe(true);
+    expect(mayAccess(policy, "OWNER@example.com")).toBe(true);
+    expect(mayAccess(policy, "someone@example.org")).toBe(true);
+    expect(mayAccess(policy, "other@example.com")).toBe(false);
+    // A suffix match needs the @: "evilexample.org" is not in @example.org.
+    expect(mayAccess(policy, "x@evilexample.org")).toBe(false);
   });
 
-  it("closed with no list admits nobody", async () => {
-    const { signupPolicy, maySignUp } = await fresh();
-    expect(maySignUp(signupPolicy({ BETTER_AUTH_SIGNUP: "closed" }), "a@b.c")).toBe(false);
+  it("closed with no list refuses to boot", async () => {
+    const { accessPolicy } = await fresh();
+    expect(() => accessPolicy({ BETTER_AUTH_ACCESS: "closed" })).toThrow(/BETTER_AUTH_ALLOWED_EMAILS/);
+    expect(() =>
+      accessPolicy({ BETTER_AUTH_ACCESS: "closed", BETTER_AUTH_ALLOWED_EMAILS: " , " }),
+    ).toThrow(/BETTER_AUTH_ALLOWED_EMAILS/);
   });
 
   it("rejects an unknown mode", async () => {
-    const { signupPolicy } = await fresh();
-    expect(() => signupPolicy({ BETTER_AUTH_SIGNUP: "invite" })).toThrow(/BETTER_AUTH_SIGNUP/);
+    const { accessPolicy } = await fresh();
+    expect(() => accessPolicy({ BETTER_AUTH_ACCESS: "invite" })).toThrow(/BETTER_AUTH_ACCESS/);
+  });
+
+  it("still reads the old BETTER_AUTH_SIGNUP name, with a warning", async () => {
+    const { accessPolicy } = await fresh();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const policy = accessPolicy({
+      BETTER_AUTH_SIGNUP: "closed",
+      BETTER_AUTH_ALLOWED_EMAILS: "owner@example.com",
+    });
+    expect(policy.open).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/BETTER_AUTH_ACCESS/));
+    // The new name wins when both are set.
+    expect(accessPolicy({ BETTER_AUTH_ACCESS: "open", BETTER_AUTH_SIGNUP: "closed" }).open).toBe(true);
+    warn.mockRestore();
   });
 
   it("the user-create hook refuses a sign-up outside the policy", async () => {
-    vi.stubEnv("BETTER_AUTH_SIGNUP", "closed");
+    vi.stubEnv("BETTER_AUTH_ACCESS", "closed");
     vi.stubEnv("BETTER_AUTH_ALLOWED_EMAILS", "owner@example.com");
     const { buildOptions } = await fresh();
     const before = buildOptions({} as import("pg").Pool).databaseHooks.user.create.before;
     const user = (email: string) => ({ email }) as Parameters<typeof before>[0];
     await expect(before(user("owner@example.com"))).resolves.toBeUndefined();
     await expect(before(user("stranger@example.com"))).rejects.toMatchObject({
-      message: "signup disabled",
+      body: { code: "signup_disabled" },
     });
+  });
+
+  it("the session-create hook turns away an existing user no longer on the list", async () => {
+    vi.stubEnv("BETTER_AUTH_ACCESS", "closed");
+    vi.stubEnv("BETTER_AUTH_ALLOWED_EMAILS", "john@example.com");
+    const { buildOptions } = await fresh();
+    const emails: Record<string, string> = { u1: "john@example.com", u2: "bob@example.com" };
+    const pool = {
+      query: vi.fn(async (_sql: string, [id]: string[]) => ({
+        rows: emails[id] ? [{ email: emails[id] }] : [],
+      })),
+    } as unknown as import("pg").Pool;
+    const before = buildOptions(pool).databaseHooks.session.create.before;
+    const session = (userId: string) => ({ userId }) as Parameters<typeof before>[0];
+    await expect(before(session("u1"))).resolves.toBeUndefined();
+    await expect(before(session("u2"))).rejects.toMatchObject({
+      body: { code: "signup_disabled" },
+    });
+    await expect(before(session("gone"))).rejects.toMatchObject({
+      body: { code: "signup_disabled" },
+    });
+  });
+
+  it("the session-create hook skips the lookup when open", async () => {
+    vi.stubEnv("BETTER_AUTH_ACCESS", "open");
+    const { buildOptions } = await fresh();
+    const pool = { query: vi.fn() } as unknown as import("pg").Pool;
+    const before = buildOptions(pool).databaseHooks.session.create.before;
+    await expect(before({ userId: "u1" } as Parameters<typeof before>[0])).resolves.toBeUndefined();
+    expect(pool.query).not.toHaveBeenCalled();
   });
 });

@@ -40,30 +40,62 @@ export function assertBetterAuthEnv(
   }
 }
 
-// Who may create an account. BETTER_AUTH_SIGNUP=open (the default) lets any
-// Google account register; closed admits only BETTER_AUTH_ALLOWED_EMAILS, a
-// comma-separated list of addresses or "@domain" suffixes. The gate runs only
-// when a user is first created: existing accounts keep signing in either way.
-export type SignupPolicy = { open: boolean; allowed: string[] };
+// Who may sign in. BETTER_AUTH_ACCESS=open (the default) admits any Google
+// account; closed admits only BETTER_AUTH_ALLOWED_EMAILS, a comma-separated
+// list of addresses or "@domain" suffixes. The list is checked on every access,
+// not only at sign-up: at account creation, at each sign-in, on every BFF
+// request (getSessionUser) and, in the backend, on every MCP token. Removing an
+// address and restarting locks that person out.
+//
+// BETTER_AUTH_SIGNUP is the old name, still read (with a warning) when
+// BETTER_AUTH_ACCESS is unset. closed with an empty list refuses to boot: it
+// would lock everyone out, and an unset list must never mean "anyone".
+export type AccessPolicy = { open: boolean; allowed: string[] };
 
-export function signupPolicy(
+export function accessPolicy(
   env: Record<string, string | undefined> = process.env,
-): SignupPolicy {
-  const mode = (env.BETTER_AUTH_SIGNUP ?? "open").trim().toLowerCase() || "open";
+): AccessPolicy {
+  let name = "BETTER_AUTH_ACCESS";
+  let raw = env.BETTER_AUTH_ACCESS;
+  if (raw === undefined && env.BETTER_AUTH_SIGNUP !== undefined) {
+    name = "BETTER_AUTH_SIGNUP";
+    raw = env.BETTER_AUTH_SIGNUP;
+    console.warn("[better-auth] BETTER_AUTH_SIGNUP is deprecated; rename it to BETTER_AUTH_ACCESS");
+  }
+  const mode = (raw ?? "open").trim().toLowerCase() || "open";
   if (mode !== "open" && mode !== "closed") {
-    throw new Error(`BETTER_AUTH_SIGNUP must be "open" or "closed", got "${mode}"`);
+    throw new Error(`${name} must be "open" or "closed", got "${mode}"`);
   }
   const allowed = (env.BETTER_AUTH_ALLOWED_EMAILS ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
+  if (mode === "closed" && allowed.length === 0) {
+    throw new Error(`${name}=closed needs BETTER_AUTH_ALLOWED_EMAILS; an empty list admits nobody`);
+  }
   return { open: mode === "open", allowed };
 }
 
-export function maySignUp(policy: SignupPolicy, email: string): boolean {
+export function mayAccess(policy: AccessPolicy, email: string): boolean {
   if (policy.open) return true;
   const e = email.trim().toLowerCase();
   return policy.allowed.some((a) => (a.startsWith("@") ? e.endsWith(a) : e === a));
+}
+
+// Read once per process: the policy changes only with the env, which needs a
+// restart anyway.
+let _policy: AccessPolicy | null = null;
+
+export function currentAccessPolicy(): AccessPolicy {
+  if (!_policy) _policy = accessPolicy();
+  return _policy;
+}
+
+// Better Auth turns an APIError carrying this code into the OAuth callback's
+// ?error=signup_disabled (the same code as its own disableSignUp), which
+// /sign-in explains.
+function accessDenied(): APIError {
+  return new APIError("FORBIDDEN", { message: "signup disabled", code: "signup_disabled" });
 }
 
 // Every Better Auth table lives in recall's own database under a ba_ prefix,
@@ -128,7 +160,7 @@ function baseURL(): string {
 
 export function buildOptions(pool: Pool) {
   const base = baseURL();
-  const policy = signupPolicy();
+  const policy = currentAccessPolicy();
   // Google sign-in, offered only when its credentials are configured. recall
   // keeps Google's real name and email: invitations, membership and
   // authorship are keyed on them.
@@ -178,12 +210,22 @@ export function buildOptions(pool: Pool) {
     databaseHooks: {
       user: {
         create: {
-          // Better Auth turns this message into the OAuth callback's
-          // ?error=signup_disabled, the same code as its own disableSignUp.
           before: async (user) => {
-            if (!maySignUp(policy, user.email)) {
-              throw new APIError("FORBIDDEN", { message: "signup disabled" });
-            }
+            if (!mayAccess(policy, user.email)) throw accessDenied();
+          },
+        },
+      },
+      // Every sign-in creates a session, so this is where an existing account
+      // whose address has left the list is turned away.
+      session: {
+        create: {
+          before: async (session) => {
+            if (policy.open) return;
+            const { rows } = await pool.query<{ email: string }>(
+              `SELECT email FROM ${BA_MODEL_NAMES.user} WHERE id = $1`,
+              [session.userId],
+            );
+            if (!rows[0] || !mayAccess(policy, rows[0].email)) throw accessDenied();
           },
         },
       },
@@ -194,7 +236,7 @@ export function buildOptions(pool: Pool) {
 
 function createAuth() {
   assertBetterAuthEnv();
-  signupPolicy(); // fail at boot on a bad BETTER_AUTH_SIGNUP, not at first sign-up
+  currentAccessPolicy(); // fail at boot on a bad BETTER_AUTH_ACCESS, not at first sign-in
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   return betterAuth(buildOptions(pool));
 }

@@ -192,7 +192,7 @@ def test_owner_matches_email_or_name():
     members = [{"upn": "Ops@Example.com", "display_name": "Ops Person"}]
     assert guide.owner_matches("ops@example.com", members)
     assert guide.owner_matches("ops person", members)
-    assert not guide.owner_matches("someone@else.com", members)
+    assert not guide.owner_matches("someone@example.net", members)
 
 
 def test_starter_guide_body_parses_cleanly():

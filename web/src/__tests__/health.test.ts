@@ -97,16 +97,16 @@ describe("reviewConfirmation", () => {
 
 describe("ownerStatus", () => {
   const members = [
-    { upn: "panu@example.com", display_name: "Panu H" },
+    { upn: "ada@example.com", display_name: "Ada L" },
     { upn: "sam@example.com", display_name: null },
   ];
 
   it("names a member matched by email or name, ignoring case", () => {
-    expect(ownerStatus("Panu@Example.com", members)).toEqual({
-      text: "Panu H · member",
+    expect(ownerStatus("Ada@Example.com", members)).toEqual({
+      text: "Ada L · member",
       warn: false,
     });
-    expect(ownerStatus("panu h", members)?.text).toBe("Panu H · member");
+    expect(ownerStatus("ada l", members)?.text).toBe("Ada L · member");
     expect(ownerStatus("sam@example.com", members)?.text).toBe("sam@example.com · member");
   });
 
