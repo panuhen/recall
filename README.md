@@ -1,43 +1,80 @@
 # re:call
 
-A self-hostable corporate "second brain" — an Obsidian-like markdown notes app with
-semantic search, backlinks, and a knowledge graph, behind Entra ID (MSAL) SSO or Google
-sign-in (Better Auth), with a first-class MCP interface so AI assistants read the same notes people write for each other.
+![re:call: your team's knowledge base is also your AI's memory](web/public/og-card.png)
 
-> Your team's knowledge base is also your AI's memory.
+**Your team's knowledge base is also your AI's memory.**
 
-## Features
+re:call is a shared markdown knowledge base. People write notes and connect them with
+`[[wikilinks]]`. AI assistants such as Claude and Copilot read and write the same notes
+over MCP, signed in as the person using them, so an assistant sees exactly what that
+person is allowed to see.
 
-- **Markdown notes** — a CodeMirror editor with live preview, wiki-style `[[links]]`,
-  tags, and frontmatter properties, plus a clean reading view for consumption.
-- **Workspaces & folders** — notes live in shared workspaces, organized into nested
-  folders. Favorites and pinning keep the important things one click away.
-- **Backlinks & graph** — every `[[link]]` is a two-way connection; a force-directed
-  knowledge graph shows how notes relate across a workspace.
-- **Diagrams** — ` ```mermaid ` fenced blocks render inline in both the editor and the
-  reading view (flowchart, sequence, class, state, ER, gantt, mindmap, and more).
-- **Semantic + keyword search** — find notes by meaning (embeddings from Azure OpenAI
-  or any OpenAI-compatible server, stored in pgvector) or by exact text, from a fast
-  command-palette dialog.
-- **Sharing & roles** — invite teammates straight into a workspace under flat
-  Viewer / Editor / Owner roles, plus org-wide workspaces for shared knowledge.
-- **Version history** — saves snapshot revisions you can browse, diff, and restore.
-- **Workspace guide & health** — plain frontmatter (`owner`, `review_every`) marks
-  notes for periodic review, an optional guide note lists a workspace's types and tags
-  for suggestions and misspelling hints, and the workspace page lists what needs
-  attention (overdue reviews, stale notes, broken links, orphans).
-- **Trash & retention** — deletes are soft and restorable, with optional scheduled
-  auto-purge.
-- **MCP interface** — ~40 tools (read/write notes, search, graph, organize, share,
-  history, diagram validation) over Streamable HTTP, so Claude, Copilot, and other
-  assistants work against the same data with the user's own identity (browser
-  OAuth consent, no PATs).
-- **Sign-in** — single-tenant Entra ID (MSAL) for M365 organizations, or Google via
-  Better Auth for everyone else, through a Next.js BFF; a `dev` auth mode injects a
-  stub user for local work.
-- **Export** — download a workspace or folder as a zip of standard markdown files.
-- **Installable PWA** — a web manifest and icons let the app install to the home
-  screen and launch standalone, with a mobile-friendly, responsive UI throughout.
+It stays small on purpose: one Postgres database, one embedding call when a note
+changes, and no language model running on the server. Your assistant already does the
+thinking. re:call gives it something reliable to think about.
+
+## Why
+
+- **Every assistant remembers something different.** Your Claude knows what you told
+  it; your teammate's knows something else. A shared knowledge base gives them all the
+  same memory, with the same permissions as the people using them.
+- **Team knowledge lives in heads and chat threads.** Notes that link to each other
+  are easier to find, and easier to keep, than messages.
+- **Wikis rot quietly.** A wrong runbook looks as trustworthy as a right one. re:call
+  gives notes an owner and a review date, and shows each workspace what is overdue,
+  broken or abandoned.
+
+## How it works
+
+1. **People write.** Markdown notes in shared workspaces, with links, tags and
+   frontmatter. Every note has an author and a revision history.
+2. **Assistants use the same notes.** About 40 MCP tools let an assistant search, read,
+   write, link and organize notes. It signs in through the user's browser (OAuth), so
+   there are no API keys or service accounts, and every change is recorded as that
+   user's.
+3. **re:call stays simple.** Search and link suggestions use keywords and embeddings;
+   unlinked mentions and workspace health are plain text matching and SQL. Anything that
+   needs reasoning, such as summarizing a workspace, drafting a note from a meeting or
+   reviewing stale runbooks, is left to the assistant you already pay for.
+
+## What's in it
+
+**Writing**
+- Markdown editor with live preview, `[[wikilinks]]`, tags and frontmatter properties,
+  plus a reading view.
+- Mermaid diagrams (flowchart, sequence, ER, gantt, mindmap and more) render in the
+  editor and the reading view.
+- Version history: browse, diff and restore earlier revisions.
+
+**Finding**
+- Search by meaning or by exact text from a command palette. Embeddings come from Azure
+  OpenAI or any OpenAI-compatible server, including a local Ollama.
+- Backlinks and a graph view show how notes connect across a workspace.
+- Unlinked mentions: notes that name another note without linking to it.
+
+**Sharing and access**
+- Workspaces with Viewer, Editor and Owner roles, invitations by email, and optional
+  org-wide read access.
+- Sign-in with Microsoft Entra ID (for M365 organizations) or Google.
+
+**Keeping it current**
+- Notes can name an `owner` and a `review_every` interval. The workspace page lists
+  overdue reviews, owners who have left, broken links, old drafts and orphans.
+- An optional guide note tells people and agents what types and tags a workspace uses,
+  and flags likely misspellings.
+- Deletes go to a restorable trash, with optional scheduled purge.
+
+**Getting data out**
+- Export a workspace or folder as a zip of plain markdown files that open in Obsidian or
+  any editor.
+- Installs as an app on desktop and mobile (PWA).
+
+## What re:call doesn't do
+
+It doesn't run an LLM on the server: no automatic tagging, no generated answers, no
+extraction pipeline. Those add cost, hide the reasoning and blur who is responsible for
+a fact. When a feature is proposed, the test is whether the user's assistant could do it
+with the tools re:call already has. If it could, re:call doesn't build it.
 
 ## Stack
 
