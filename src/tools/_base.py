@@ -74,6 +74,14 @@ def note_dict(n, **extra) -> dict:
     return d
 
 
+async def written_note_dict(n, **extra) -> dict:
+    """note_dict for a note just written. Write queries don't join `users`, so
+    their Note carries created_by/updated_by as None; re-read it so the
+    response names the author the way read_note does."""
+    fresh = await data.get_note(n.id)
+    return note_dict(fresh or n, **extra)
+
+
 def folder_dict(f) -> dict:
     return {
         "id": f.id,

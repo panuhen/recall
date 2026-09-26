@@ -20,6 +20,7 @@ from ._base import (
     note_and_role,
     note_dict,
     resolve_user,
+    written_note_dict,
 )
 from .health import write_feedback
 
@@ -133,7 +134,7 @@ def register(mcp: FastMCP) -> None:
         if candidates and candidates[0]["score"] >= _DUP_SCORE:
             extra["possible_duplicate"] = candidates[0]
         extra.update(await write_feedback(note))
-        return note_dict(note, **extra)
+        return await written_note_dict(note, **extra)
 
     @mcp.tool(title="Update a note", annotations=_WRITE)
     async def update_note(
@@ -167,8 +168,8 @@ def register(mcp: FastMCP) -> None:
             current = await data.get_note(note.id)
             return {"error": "conflict",
                     "note": note_dict(current) if current else None}
-        return note_dict(updated, link_candidates=await _candidates(updated),
-                         **await write_feedback(updated))
+        return await written_note_dict(updated, link_candidates=await _candidates(updated),
+                                       **await write_feedback(updated))
 
     @mcp.tool(title="Link one note to another", annotations=_WRITE)
     async def link_notes(note_id: str, target_title: str) -> dict:
@@ -196,7 +197,7 @@ def register(mcp: FastMCP) -> None:
         sep = "" if note.body.endswith("\n") or not note.body else "\n\n"
         new_body = f"{note.body}{sep}[[{target}]]\n"
         updated = await data.update_note(note.id, None, new_body, user.id)
-        return note_dict(updated)
+        return await written_note_dict(updated)
 
     # Not folded into `link_notes`: that tool APPENDS a link to any title
     # (even a dangling one) at the end of the body, whereas this one rewrites
@@ -238,7 +239,7 @@ def register(mcp: FastMCP) -> None:
             return {"error": e.code}
         except data.StaleUpdate:
             return {"error": "conflict"}
-        return note_dict(
+        return await written_note_dict(
             updated, linked_to={"id": target.id, "title": target.title,
                                 "url": note_url(target.id)},
         )

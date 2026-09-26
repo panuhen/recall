@@ -10,8 +10,8 @@ from ._base import (
     UNAUTH,
     WRITE_ROLES,
     note_and_role,
-    note_dict,
     resolve_user,
+    written_note_dict,
 )
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
@@ -60,4 +60,4 @@ def register(mcp: FastMCP) -> None:
         restored = await data.restore_revision(note.id, revision_id, user.id)
         if restored is None:
             return NOT_FOUND
-        return note_dict(restored)
+        return await written_note_dict(restored)

@@ -18,8 +18,8 @@ from ._base import (
     folder_and_role,
     folder_dict,
     note_and_role,
-    note_dict,
     resolve_user,
+    written_note_dict,
 )
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
@@ -216,7 +216,7 @@ def register(mcp: FastMCP) -> None:
                 f = await data.get_folder(folder_id)
                 if f is None or f.project_id != target:
                     return {"error": "invalid_folder"}
-            return note_dict(await data.move_note(note.id, target, folder_id, user.id))
+            return await written_note_dict(await data.move_note(note.id, target, folder_id, user.id))
         if item_type == "folder":
             folder, role = await folder_and_role(user, item_id)
             if folder is None or role is None:
@@ -256,7 +256,7 @@ def register(mcp: FastMCP) -> None:
                 return NOT_FOUND
             if role not in WRITE_ROLES:
                 return FORBIDDEN
-            return note_dict(await data.copy_note(note.id, user.id))
+            return await written_note_dict(await data.copy_note(note.id, user.id))
         if item_type == "folder":
             folder, role = await folder_and_role(user, item_id)
             if folder is None or role is None:

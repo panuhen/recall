@@ -86,3 +86,22 @@ async def test_distinct_note_has_no_nudge(
 async def test_dup_threshold_constant_sanity():
     # The nudge is a conservative >= 0.90 gate (documented anti-fragmentation).
     assert notes_tools._DUP_SCORE == 0.90
+
+
+# ── author in write responses ───────────────────────────────
+
+
+async def test_write_responses_name_the_author(monkeypatch, make_user, make_project, tool_fn):
+    """create_note / update_note responses carry created_by and updated_by like
+    read_note does, so an agent checking authorship right after a write sees it."""
+    user = await make_user(name="Ada Lovelace")
+    proj = await make_project(user)
+    monkeypatch.setattr("src.tools.notes.resolve_user", _async_return(user))
+    monkeypatch.setattr("src.tools.notes.embed_query", _async_return(None))
+
+    author = {"id": user.id, "name": "Ada Lovelace"}
+    created = await (await tool_fn("create_note"))(project_id=proj.id, title="T", body="v1")
+    assert created["created_by"] == author and created["updated_by"] == author
+
+    updated = await (await tool_fn("update_note"))(note_id=created["id"], body="v2")
+    assert updated["created_by"] == author and updated["updated_by"] == author
