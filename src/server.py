@@ -94,6 +94,10 @@ INSTRUCTIONS = (
     "`list_tree` first so you don't add a second one. A note can set `owner:` (a workspace "
     "member's email, see `list_members`) and `review_every:` (e.g. 6mo); "
     "`stale_notes` lists those due for review. "
+    "When a note's content comes from somewhere other than the user, such as a "
+    "web page, a document or a meeting, set `source:` to it (a URL or a short "
+    "description; a list if several). Readers use it to judge how far to trust "
+    "the note. "
     "You act as the signed-in user and see only workspaces they can access; "
     "writes require editor or owner."
 )

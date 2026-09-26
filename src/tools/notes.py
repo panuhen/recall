@@ -84,7 +84,9 @@ def register(mcp: FastMCP) -> None:
         write the note the way the guide says (its types, tags and prose).
 
         Body is standard markdown; `[[wikilinks]]` become graph edges and YAML
-        frontmatter (type/tags/status) is parsed automatically. Fenced ``` code
+        frontmatter (type/tags/status) is parsed automatically. If the content
+        comes from something other than the user (a web page, a document, a
+        meeting), add a `source:` property naming it. Fenced ``` code
         blocks are syntax-highlighted in the reading view — a ```language tag is
         optional (recall auto-detects) but more reliable for short snippets.
         Returns the note plus `link_candidates` — semantically similar notes you
