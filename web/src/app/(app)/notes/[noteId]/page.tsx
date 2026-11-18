@@ -812,7 +812,7 @@ export default function NotePage({
                     canEdit={canEdit}
                     onMarkReviewed={markAsReviewed}
                   />
-                  {showProps && (mode === "live" || !canEdit) && (
+                  {showProps && (mode !== "source" || !canEdit) && (
                     <div className="space-y-1 border-b pb-4">
                       <div className="text-sm text-muted-foreground">Properties</div>
                       <NoteProperties
@@ -820,7 +820,8 @@ export default function NotePage({
                         note={note}
                         conventions={note.conventions ?? null}
                         onChange={applyFrontmatter}
-                        readOnly={!canEdit}
+                        readOnly={!canEdit || mode === "read"}
+                        links={{ resolveLink, onFollowLink: followLink }}
                       />
                     </div>
                   )}

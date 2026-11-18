@@ -5,6 +5,7 @@ import {
   Calendar,
   CalendarClock,
   Hash,
+  Link2,
   List,
   Plus,
   SquareCheck,
@@ -76,6 +77,99 @@ function isNested(v: unknown): boolean {
   return v !== null && typeof v === "object";
 }
 
+// An unquoted `key: [[Note]]` is valid YAML, but it parses as a nested list
+// ([["Note"]]) rather than the wikilink the author meant. Turn that shape back
+// into "[[Note]]" (for the scalar and for each item of a list) so it shows
+// and links as a wikilink instead of an opaque nested value.
+function asWikilink(v: unknown): string | null {
+  return Array.isArray(v) &&
+    v.length === 1 &&
+    Array.isArray(v[0]) &&
+    v[0].length === 1 &&
+    typeof v[0][0] === "string"
+    ? `[[${v[0][0]}]]`
+    : null;
+}
+
+function unwrapWikilinks(v: unknown): unknown {
+  const single = asWikilink(v);
+  if (single) return single;
+  if (Array.isArray(v) && v.length && v.every((x) => asWikilink(x)))
+    return v.map((x) => asWikilink(x));
+  return v;
+}
+
+// A property value that is a link: an external http(s) URL or a [[wikilink]].
+const URL_RE = /^https?:\/\/\S+$/i;
+const WIKILINK_RE = /^\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]$/;
+
+function isLink(text: string): boolean {
+  const t = text.trim();
+  return URL_RE.test(t) || WIKILINK_RE.test(t);
+}
+
+function hasLink(v: PropValue): boolean {
+  if (typeof v === "string") return isLink(v);
+  return Array.isArray(v) && v.some((x) => typeof x === "string" && isLink(x));
+}
+
+export type PropertyLinks = {
+  resolveLink?: (target: string) => string | null;
+  onFollowLink?: (target: string) => void;
+};
+
+// One value rendered as text, or as a clickable link when it is one. External
+// URLs open in a new tab; wikilinks go through the page's link handler, which
+// opens the note, or creates it when the reader may edit. An unresolved
+// wikilink is dimmed, as in the body.
+function LinkedText({ text, links }: { text: string; links?: PropertyLinks }) {
+  const t = text.trim();
+  if (URL_RE.test(t)) {
+    return (
+      <a
+        href={t}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="break-all text-[var(--link)] underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {t}
+      </a>
+    );
+  }
+  const m = WIKILINK_RE.exec(t);
+  if (m && links?.onFollowLink) {
+    const target = m[1].trim();
+    const label = (m[2] ?? m[1]).trim();
+    const live = !!links.resolveLink?.(target);
+    const follow = links.onFollowLink;
+    return (
+      <span
+        role="link"
+        tabIndex={0}
+        title={live ? undefined : "No note with this title yet"}
+        className={cn(
+          "cursor-pointer underline",
+          live ? "text-[var(--link)]" : "text-muted-foreground decoration-dotted",
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          follow(target);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            follow(target);
+          }
+        }}
+      >
+        {label}
+      </span>
+    );
+  }
+  return <span>{text}</span>;
+}
+
 function inferKind(key: string, v: unknown): Kind {
   if (isNested(v)) return "object";
   if (key === "tags") return "tags";
@@ -90,7 +184,8 @@ function initProps(note: Note): Prop[] {
   if (note.type) out.push({ id: nextId(), key: "type", value: note.type, kind: "text" });
   if (note.status) out.push({ id: nextId(), key: "status", value: note.status, kind: "text" });
   if (note.tags.length) out.push({ id: nextId(), key: "tags", value: note.tags, kind: "tags" });
-  for (const [k, v] of Object.entries(note.metadata ?? {})) {
+  for (const [k, raw] of Object.entries(note.metadata ?? {})) {
+    const v = unwrapWikilinks(raw);
     out.push({ id: nextId(), key: k, value: (v ?? "") as PropValue, kind: inferKind(k, v) });
   }
   return out;
@@ -142,11 +237,14 @@ export function NoteProperties({
   onChange,
   readOnly = false,
   conventions = null,
+  links,
 }: {
   note: Note;
   onChange: (updates: Record<string, FrontmatterValue>) => void;
   readOnly?: boolean;
   conventions?: GuideConventions | null;
+  // Makes URL and [[wikilink]] values clickable in the read-only list.
+  links?: PropertyLinks;
 }) {
   // Local, authoritative list (the parent keys this by note.id, so it
   // re-initialises per note and survives autosave refreshes of the same note).
@@ -228,13 +326,17 @@ export function NoteProperties({
         {props.map((p) => (
           <div key={p.id} className="flex items-baseline gap-3">
             <div className="flex w-28 shrink-0 items-center gap-1.5 pt-0.5 text-muted-foreground md:w-40">
-              <KindIcon kind={p.kind} />
+              {p.kind !== "object" && hasLink(p.value) ? (
+                <Link2 size={14} className="shrink-0" />
+              ) : (
+                <KindIcon kind={p.kind} />
+              )}
               <span className="truncate" title={p.key}>
                 {p.key}
               </span>
             </div>
             <div className="min-w-0 flex-1">
-              <ReadOnlyValue prop={p} />
+              <ReadOnlyValue prop={p} links={links} />
             </div>
           </div>
         ))}
@@ -262,7 +364,7 @@ export function NoteProperties({
 }
 
 // Static value display for the read-only (viewer) Properties list.
-function ReadOnlyValue({ prop }: { prop: Prop }) {
+function ReadOnlyValue({ prop, links }: { prop: Prop; links?: PropertyLinks }) {
   if (prop.kind === "object") return <NestedValue value={prop.value} />;
   if (prop.kind === "tags" || prop.kind === "list") {
     const items = Array.isArray(prop.value) ? (prop.value as string[]) : [];
@@ -270,8 +372,8 @@ function ReadOnlyValue({ prop }: { prop: Prop }) {
     return (
       <div className="flex flex-wrap gap-1">
         {items.map((item) => (
-          <span key={item} className="rounded bg-accent px-1.5 py-0.5 text-xs">
-            {item}
+          <span key={item} className="min-w-0 rounded bg-accent px-1.5 py-0.5 text-xs">
+            <LinkedText text={String(item)} links={links} />
           </span>
         ))}
       </div>
@@ -279,7 +381,11 @@ function ReadOnlyValue({ prop }: { prop: Prop }) {
   }
   if (prop.kind === "checkbox") return <span>{prop.value === true ? "Yes" : "No"}</span>;
   const text = prop.value == null || prop.value === "" ? "" : String(prop.value);
-  return text ? <span>{text}</span> : <span className="text-muted-foreground">Empty</span>;
+  return text ? (
+    <LinkedText text={text} links={links} />
+  ) : (
+    <span className="text-muted-foreground">Empty</span>
+  );
 }
 
 // A nested value summarised: a mapping's keys, or a list's length.
