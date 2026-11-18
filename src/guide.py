@@ -298,5 +298,10 @@ def starter_guide_body(owner: str | None, types: list[str], tags: list[str]) -> 
         "runbooks have an `owner:` and `review_every: 6mo`, so they show up",
         "on the workspace page when a review is due.",
         "",
+        "Link notes in the body with `[[wikilinks]]`, where the sentence says",
+        "why. A property can hold a link about the whole note, such as",
+        '`source: https://...` or `related: "[[Note]]"`; both are clickable',
+        "in the reading view.",
+        "",
     ]
     return "\n".join(lines)

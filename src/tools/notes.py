@@ -86,7 +86,10 @@ def register(mcp: FastMCP) -> None:
         Body is standard markdown; `[[wikilinks]]` become graph edges and YAML
         frontmatter (type/tags/status) is parsed automatically. If the content
         comes from something other than the user (a web page, a document, a
-        meeting), add a `source:` property naming it. Fenced ``` code
+        meeting), add a `source:` property naming it. A property value can
+        be a URL or a quoted `"[[wikilink]]"`; both are clickable in the
+        reading view. Prefer body links where the context says why, and
+        properties for links about the whole note. Fenced ``` code
         blocks are syntax-highlighted in the reading view — a ```language tag is
         optional (recall auto-detects) but more reliable for short snippets.
         Returns the note plus `link_candidates` — semantically similar notes you
